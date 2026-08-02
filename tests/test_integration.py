@@ -26,7 +26,7 @@ async def _db_available() -> bool:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 — any failure means "not available", by design
         return False
     finally:
         await engine.dispose()
@@ -47,6 +47,10 @@ async def session() -> AsyncSession:
 
 @pytest.mark.asyncio
 async def test_init_log_search_flow(session: AsyncSession) -> None:
+    """Agent-driven flow: log_raw_event is a plain audit-trail append (no LLM
+    distillation) — the caller (the agent) reads the raw content itself and
+    writes the structured L3 rule directly, citing raw_event_id for provenance.
+    """
     project = f"/tmp/test-project-{uuid.uuid4()}"
 
     init = await memory_service.init_project_memory(
@@ -54,49 +58,33 @@ async def test_init_log_search_flow(session: AsyncSession) -> None:
     )
     assert init["status"] == "initialized"
 
+    event = await memory_service.log_raw_event(
+        session,
+        project_path=project,
+        event_type="feedback",
+        content="Decision: use FastAPI with uv for dependency management.",
+        source_hash=compute_source_hash("Decision: use FastAPI with uv"),
+    )
+    assert "distillation_status" not in event
+
     fake_embedding = [0.01] * 1536
 
-    with (
-        patch(
-            "src.services.distillation_service.chat_completion",
-            new_callable=AsyncMock,
-            return_value='{"facts":[{"entity_key":"stack","content":"Uses FastAPI and uv"}]}',
-        ),
-        patch(
-            "src.services.distillation_service.embed_text",
-            new_callable=AsyncMock,
-            return_value=fake_embedding,
-        ),
-        patch(
-            "src.services.search_service.embed_text",
-            new_callable=AsyncMock,
-            return_value=fake_embedding,
-        ),
+    # Agent extracts the fact itself and writes it directly — no distillation LLM call.
+    await memory_service.upsert_distilled_rule(
+        session,
+        project_path=project,
+        entity_key="stack",
+        content="Uses FastAPI and uv",
+        raw_event_id=event["id"],
+        source_hash=event["source_hash"],
+        embedding=fake_embedding,
+    )
+
+    with patch(
+        "src.services.search_service.embed_text",
+        new_callable=AsyncMock,
+        return_value=fake_embedding,
     ):
-        from src.services import distillation_service
-
-        event = await memory_service.log_raw_event(
-            session,
-            project_path=project,
-            event_type="feedback",
-            content="Decision: use FastAPI with uv for dependency management.",
-            source_hash=compute_source_hash("Decision: use FastAPI with uv"),
-        )
-        distill = await distillation_service.distill_event_by_id(session, event["id"])
-        assert distill["status"] == "processed"
-        assert distill["facts_count"] >= 1
-
-        # Direct L3 upsert path also works
-        await memory_service.upsert_distilled_rule(
-            session,
-            project_path=project,
-            entity_key="stack",
-            content="Uses FastAPI and uv",
-            raw_event_id=event["id"],
-            source_hash=event["source_hash"],
-            embedding=fake_embedding,
-        )
-
         results = await search_service.search_memory(
             session,
             project_path=project,
@@ -106,5 +94,273 @@ async def test_init_log_search_flow(session: AsyncSession) -> None:
         )
         assert results["count"] >= 1
         assert any("FastAPI" in r["content"] for r in results["results"])
+
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_ops_layer_sources_tasks_facts_watermarks(session: AsyncSession) -> None:
+    from src.services import (
+        fact_service,
+        source_service,
+        task_service,
+        watched_ref_service,
+        watermark_service,
+    )
+
+    project = f"/tmp/ops-project-{uuid.uuid4()}"
+    init = await memory_service.init_project_memory(
+        session,
+        project,
+        "Ops layer smoke",
+        sources=[
+            {
+                "source_key": "pr_1097",
+                "source_type": "github_pr",
+                "display_name": "War room PR",
+                "connection_config": {
+                    "repo": "TechX-Corp/synaptix-platform",
+                    "number": 1097,
+                },
+                "read_recipe": "gh api repos/.../issues/1097/comments?since=...",
+            }
+        ],
+    )
+    assert init["status"] == "initialized"
+    assert init["project_id"]
+    assert any(s["source_key"] == "pr_1097" for s in init["sources_registered"])
+
+    sources = await source_service.list_data_sources(session, project)
+    keys = {s["source_key"] for s in sources["sources"]}
+    assert "user_session" in keys
+    assert "pr_1097" in keys
+
+    fake_embedding = [0.02] * 1536
+    with (
+        patch(
+            "src.services.fact_service.embed_text",
+            new_callable=AsyncMock,
+            return_value=fake_embedding,
+        ),
+        patch(
+            "src.services.task_service.embed_text",
+            new_callable=AsyncMock,
+            return_value=fake_embedding,
+        ),
+        patch(
+            "src.services.watched_ref_service.embed_text",
+            new_callable=AsyncMock,
+            return_value=fake_embedding,
+        ),
+    ):
+        fact = await fact_service.upsert_fact(
+            session,
+            project,
+            kind="decision",
+            title="Freeze active",
+            content="PHA-1 reconcile freeze bars feature merges",
+            priority=10,
+            source_key="pr_1097",
+        )
+        assert fact["action"] == "created"
+        assert fact["source_id"]
+
+        task = await task_service.upsert_task(
+            session,
+            project,
+            task_key="O-28",
+            title="Ask Khanh Q1-Q5",
+            content="Awaiting requalify seam answers",
+            waiting_on="Khanh",
+            priority=5,
+        )
+        assert task["task_key"] == "O-28"
+        closed = await task_service.close_task(session, project, "O-28")
+        assert closed["status"] == "closed"
+
+        ref = await watched_ref_service.upsert_watched_ref(
+            session,
+            project,
+            ref_type="pr",
+            ref_value="1106",
+            why="sre-agent phase1 branch",
+            disposition="mine",
+            source_key="pr_1097",
+        )
+        assert ref["ref_value"] == "1106"
+
+    wm = await watermark_service.upsert_watermark(
+        session,
+        project,
+        source_key="pr_1097",
+        stream_key="comments",
+        indexed_through={"updated_at": "2026-07-31T03:20:00Z", "id": 5116061513},
+        full_read_ids=[5116061513],
+        known_gaps=[],
+    )
+    assert wm["action"] == "created"
+    got = await watermark_service.get_watermark(
+        session, project, source_key="pr_1097", stream_key="comments"
+    )
+    assert got["indexed_through"]["id"] == 5116061513
+
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_l1_reference_service_and_watched_ref_status_note(
+    session: AsyncSession,
+) -> None:
+    from src.services import l1_reference_service, watched_ref_service
+
+    project = f"/tmp/l1-ref-project-{uuid.uuid4()}"
+    init = await memory_service.init_project_memory(session, project, "L1 reference smoke")
+    assert init["status"] == "initialized"
+
+    fake_embedding = [0.03] * 1536
+    long_roster = "| Name | GitHub | Teams |\n| --- | --- | --- |\n| Nam | nq | n@x.com |\n" + (
+        "x" * 2000
+    )
+
+    with patch(
+        "src.services.l1_reference_service.embed_text",
+        new_callable=AsyncMock,
+        return_value=fake_embedding,
+    ):
+        created = await l1_reference_service.upsert_l1_reference(
+            session,
+            project,
+            ref_key="roster",
+            title="People & contact roster",
+            content=long_roster,
+            is_policy=False,
+            priority=0,
+        )
+        assert created["action"] == "created"
+        assert len(created["content"]) > 1500  # untruncated even on the upsert response
+
+        overwritten = await l1_reference_service.upsert_l1_reference(
+            session,
+            project,
+            ref_key="roster",
+            title="People & contact roster",
+            content="Updated roster content " + ("y" * 2000),
+            is_policy=False,
+            priority=0,
+        )
+        assert overwritten["action"] == "overwritten"
+        assert overwritten["id"] == created["id"]
+
+        unchanged = await l1_reference_service.upsert_l1_reference(
+            session,
+            project,
+            ref_key="roster",
+            title="People & contact roster",
+            content="Updated roster content " + ("y" * 2000),
+            is_policy=False,
+            priority=0,
+        )
+        assert unchanged["action"] == "unchanged"
+
+        policy = await l1_reference_service.upsert_l1_reference(
+            session,
+            project,
+            ref_key="write-gate-policy",
+            title="Project write-gate policy",
+            content="Confirm before any push. " + ("z" * 2000),
+            is_policy=True,
+            priority=10,
+        )
+        assert policy["action"] == "created"
+        assert policy["is_policy"] is True
+
+    full = await l1_reference_service.get_l1_reference(session, project, "roster")
+    assert len(full["content"]) > 1500
+    assert "[truncated" not in full["content"]
+
+    missing = await l1_reference_service.get_l1_reference(session, project, "does-not-exist")
+    assert missing["error"] == "not_found"
+
+    listed = await l1_reference_service.list_l1_references(session, project)
+    assert listed["count"] == 2
+    assert all("content" not in item for item in listed["references"])
+
+    policies_only = await l1_reference_service.list_l1_references(
+        session, project, policy_only=True
+    )
+    assert policies_only["count"] == 1
+    assert policies_only["references"][0]["ref_key"] == "write-gate-policy"
+
+    with patch(
+        "src.services.l1_reference_service.embed_text",
+        new_callable=AsyncMock,
+        return_value=fake_embedding,
+    ):
+        search_results = await l1_reference_service.search_l1_references(
+            session, project, "roster", search_type="keyword", limit=5
+        )
+        assert search_results["count"] >= 1
+
+    active = await l1_reference_service.get_active_policies(session, project)
+    assert active["count"] == 1
+    assert len(active["policies"][0]["content"]) > 1500  # untruncated
+
+    with patch(
+        "src.services.watched_ref_service.embed_text",
+        new_callable=AsyncMock,
+        return_value=fake_embedding,
+    ):
+        ref = await watched_ref_service.upsert_watched_ref(
+            session,
+            project,
+            ref_type="pr",
+            ref_value="9999",
+            why="tracking release branch",
+            status_note="opened, awaiting review",
+        )
+        assert ref["why"] == "tracking release branch"
+        assert ref["status_note"] == "opened, awaiting review"
+
+        updated_ref = await watched_ref_service.upsert_watched_ref(
+            session,
+            project,
+            ref_type="pr",
+            ref_value="9999",
+            status_note="MERGED to main 2026-08-02T00:53:12Z, squash 48a533d49",
+        )
+        assert updated_ref["why"] == "tracking release branch"  # unchanged
+        assert updated_ref["status_note"] == "MERGED to main 2026-08-02T00:53:12Z, squash 48a533d49"
+
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_query_deep_memory_sql_fallback_when_project_path_not_selected(
+    session: AsyncSession,
+) -> None:
+    """A SELECT that doesn't project project_path fails the first (subquery-wrapped)
+    attempt; the fallback must roll back before retrying on the same session, or
+    Postgres rejects the retry with InFailedSQLTransactionError.
+    """
+    from src.services.sql_service import query_deep_memory_sql
+
+    project = f"/tmp/sql-fallback-project-{uuid.uuid4()}"
+    await memory_service.init_project_memory(session, project, "sql fallback smoke")
+    await memory_service.log_raw_event(
+        session,
+        project_path=project,
+        event_type="feedback",
+        content="hello world",
+        source_hash=compute_source_hash("hello world"),
+    )
+    await session.commit()
+
+    result = await query_deep_memory_sql(
+        session,
+        project_path=project,
+        sql_query="SELECT event_type, raw_content FROM l4_raw_events",
+    )
+    assert result["count"] == 1
+    assert result["rows"][0]["event_type"] == "feedback"
 
     await session.commit()

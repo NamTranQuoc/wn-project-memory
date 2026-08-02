@@ -10,7 +10,10 @@ scheduler = AsyncIOScheduler()
 
 
 async def _run_partition_maintenance() -> None:
-    from src.services.partition_service import ensure_next_month_partition, drop_old_partitions
+    from src.services.partition_service import (
+        drop_old_partitions,
+        ensure_next_month_partition,
+    )
 
     async with AsyncSessionLocal() as session:
         try:
@@ -20,18 +23,6 @@ async def _run_partition_maintenance() -> None:
         except Exception:
             await session.rollback()
             logger.exception("Partition maintenance failed")
-
-
-async def _run_distillation_sweep() -> None:
-    from src.services.distillation_service import process_pending_events
-
-    async with AsyncSessionLocal() as session:
-        try:
-            await process_pending_events(session, batch_size=10)
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            logger.exception("Distillation sweep failed")
 
 
 def start_scheduler() -> None:
@@ -44,13 +35,6 @@ def start_scheduler() -> None:
         hour=0,
         minute=5,
         id="partition_maintenance",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _run_distillation_sweep,
-        trigger="interval",
-        seconds=30,
-        id="distillation_sweep",
         replace_existing=True,
     )
     # Bootstrap partitions immediately on startup

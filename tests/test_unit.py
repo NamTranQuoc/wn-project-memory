@@ -1,3 +1,7 @@
+from datetime import datetime, timezone
+
+import pytest
+
 from src.services.hashing import compute_content_hash, compute_source_hash
 from src.services.partition_service import (
     month_start,
@@ -7,9 +11,6 @@ from src.services.partition_service import (
 )
 from src.services.sanitize import TRUNCATE_SUFFIX, sanitize_and_truncate
 from src.services.sql_service import ensure_limit, validate_select_only
-
-import pytest
-from datetime import datetime, timezone
 
 
 class TestSanitize:

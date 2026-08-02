@@ -11,7 +11,7 @@ from tenacity import (
 )
 
 from src.core.config import get_settings
-from src.services.secret_redactor import redact_messages, redact_secrets
+from src.services.secret_redactor import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -43,44 +43,6 @@ def _provider_kwargs() -> dict[str, Any]:
     stop=stop_after_attempt(5),
     reraise=True,
 )
-async def chat_completion(
-    messages: list[dict[str, str]],
-    *,
-    model: str | None = None,
-    response_format: dict[str, Any] | None = None,
-) -> str:
-    _ensure_api_key()
-    settings = get_settings()
-    # Strip secrets before any provider call — pure regex, never LLM-based.
-    safe_messages = redact_messages(messages)
-    kwargs: dict[str, Any] = {
-        "model": model or settings.distillation_model,
-        "messages": safe_messages,
-        **_provider_kwargs(),
-    }
-    if response_format is not None:
-        kwargs["response_format"] = response_format
-
-    try:
-        response = await litellm.acompletion(**kwargs)
-        return response.choices[0].message.content or ""
-    except Exception as exc:
-        msg = str(exc).lower()
-        if any(
-            token in msg
-            for token in ("rate limit", "rate_limit", "timeout", "connection", "429", "503")
-        ):
-            logger.warning("Transient LLM error, will retry: %s", exc)
-            raise LLMTransientError(str(exc)) from exc
-        raise
-
-
-@retry(
-    retry=retry_if_exception_type(LLMTransientError),
-    wait=wait_exponential(multiplier=1, min=1, max=60),
-    stop=stop_after_attempt(5),
-    reraise=True,
-)
 async def create_embedding(text: str, *, model: str | None = None) -> list[float]:
     _ensure_api_key()
     settings = get_settings()
@@ -96,7 +58,14 @@ async def create_embedding(text: str, *, model: str | None = None) -> list[float
         msg = str(exc).lower()
         if any(
             token in msg
-            for token in ("rate limit", "rate_limit", "timeout", "connection", "429", "503")
+            for token in (
+                "rate limit",
+                "rate_limit",
+                "timeout",
+                "connection",
+                "429",
+                "503",
+            )
         ):
             logger.warning("Transient embedding error, will retry: %s", exc)
             raise LLMTransientError(str(exc)) from exc

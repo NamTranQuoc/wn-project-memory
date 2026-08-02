@@ -7,7 +7,7 @@ from sqlalchemy import text
 from src.core.auth import ApiKeyMiddleware, warn_if_rest_unauthenticated
 from src.core.db import engine
 from src.core.scheduler import start_scheduler, stop_scheduler
-from src.routers import events_stream, health, memory
+from src.routers import health, memory
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,9 +21,7 @@ async def lifespan(_app: FastAPI):
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     except Exception:
-        logger.exception(
-            "Could not verify Postgres extensions — is the database running?"
-        )
+        logger.exception("Could not verify Postgres extensions — is the database running?")
 
     warn_if_rest_unauthenticated()
     start_scheduler()
@@ -36,7 +34,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Agentic Memory Service",
-    description="Hierarchical Agentic Memory Service (L1-L4) with MCP + REST/SSE",
+    description="Hierarchical Agentic Memory Service (L0-L4) with MCP + REST",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -44,4 +42,3 @@ app = FastAPI(
 app.add_middleware(ApiKeyMiddleware)
 app.include_router(health.router)
 app.include_router(memory.router)
-app.include_router(events_stream.router)

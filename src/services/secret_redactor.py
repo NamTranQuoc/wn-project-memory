@@ -27,9 +27,7 @@ _PREFIXED_SECRET_PATTERNS: list[re.Pattern[str]] = [
     # Stripe
     re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b"),
     # JWT (header.payload.signature)
-    re.compile(
-        r"\beyJ[A-Za-z0-9_\-]+=*\.[A-Za-z0-9_\-]+=*\.[A-Za-z0-9_\-]+=*\b"
-    ),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]+=*\.[A-Za-z0-9_\-]+=*\.[A-Za-z0-9_\-]+=*\b"),
 ]
 
 # PEM private key blocks
@@ -75,14 +73,10 @@ _SECRET_ASSIGNMENT = re.compile(
 )
 
 # Authorization: Bearer <token>
-_BEARER = re.compile(
-    r"(?i)(\bAuthorization\s*:\s*Bearer\s+)([A-Za-z0-9\-._~+/]+=*)"
-)
+_BEARER = re.compile(r"(?i)(\bAuthorization\s*:\s*Bearer\s+)([A-Za-z0-9\-._~+/]+=*)")
 
 # Basic auth header
-_BASIC_AUTH = re.compile(
-    r"(?i)(\bAuthorization\s*:\s*Basic\s+)([A-Za-z0-9+/=]+)"
-)
+_BASIC_AUTH = re.compile(r"(?i)(\bAuthorization\s*:\s*Basic\s+)([A-Za-z0-9+/=]+)")
 
 
 def redact_secrets(text: str | None) -> str:
@@ -113,14 +107,3 @@ def _mask_assignment(match: re.Match[str]) -> str:
         quote = value[0]
         return f"{prefix}{quote}{REDACTION_MASK}{quote}"
     return f"{prefix}{REDACTION_MASK}"
-
-
-def redact_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Return a shallow copy of chat messages with content redacted."""
-    redacted: list[dict[str, str]] = []
-    for message in messages:
-        item = dict(message)
-        if "content" in item and isinstance(item["content"], str):
-            item["content"] = redact_secrets(item["content"])
-        redacted.append(item)
-    return redacted

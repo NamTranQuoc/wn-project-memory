@@ -1,4 +1,4 @@
-from src.services.secret_redactor import REDACTION_MASK, redact_messages, redact_secrets
+from src.services.secret_redactor import REDACTION_MASK, redact_secrets
 
 
 class TestSecretRedactor:
@@ -10,9 +10,7 @@ class TestSecretRedactor:
 
     def test_openai_proj_key(self) -> None:
         token = "sk-proj-" + ("A" * 40)
-        assert redact_secrets(f"OPENAI_API_KEY={token}") == (
-            f"OPENAI_API_KEY={REDACTION_MASK}"
-        )
+        assert redact_secrets(f"OPENAI_API_KEY={token}") == (f"OPENAI_API_KEY={REDACTION_MASK}")
 
     def test_github_pat(self) -> None:
         token = "ghp_" + ("x" * 36)
@@ -21,9 +19,7 @@ class TestSecretRedactor:
 
     def test_password_assignment(self) -> None:
         assert redact_secrets("password=s3cretValue!") == f"password={REDACTION_MASK}"
-        assert redact_secrets('{"password": "s3cret"}') == (
-            f'{{"password": "{REDACTION_MASK}"}}'
-        )
+        assert redact_secrets('{"password": "s3cret"}') == (f'{{"password": "{REDACTION_MASK}"}}')
 
     def test_database_url_password(self) -> None:
         url = "postgresql://memory:superSecret@localhost:5432/memory_agent"
@@ -64,17 +60,6 @@ class TestSecretRedactor:
     def test_plain_text_untouched(self) -> None:
         text = "Use FastAPI with uv for dependency management."
         assert redact_secrets(text) == text
-
-    def test_redact_messages(self) -> None:
-        messages = [
-            {"role": "system", "content": "safe"},
-            {"role": "user", "content": "password=hunter2"},
-        ]
-        out = redact_messages(messages)
-        assert out[0]["content"] == "safe"
-        assert out[1]["content"] == f"password={REDACTION_MASK}"
-        # Original list not mutated
-        assert messages[1]["content"] == "password=hunter2"
 
     def test_idempotent(self) -> None:
         once = redact_secrets("api_key=sk-abcdefghijklmnopqrstuvwxyz012345")

@@ -25,9 +25,7 @@ def _row_to_dict(row: L3DistilledKnowledge, score: float | None = None) -> dict:
         "content_hash": row.content_hash,
         "source_hash": row.source_hash,
         "raw_event_id": str(row.raw_event_id) if row.raw_event_id else None,
-        "last_verified_at": (
-            row.last_verified_at.isoformat() if row.last_verified_at else None
-        ),
+        "last_verified_at": (row.last_verified_at.isoformat() if row.last_verified_at else None),
     }
     if score is not None:
         payload["score"] = float(score)
@@ -110,9 +108,7 @@ async def search_memory(
             existing = merged.get(item["id"])
             if existing is None or item.get("score", 0) > existing.get("score", 0):
                 merged[item["id"]] = item
-        results = sorted(
-            merged.values(), key=lambda x: x.get("score", 0), reverse=True
-        )[:capped]
+        results = sorted(merged.values(), key=lambda x: x.get("score", 0), reverse=True)[:capped]
 
     return {
         "project_path": project_path,

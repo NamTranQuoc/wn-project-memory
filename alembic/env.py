@@ -1,12 +1,13 @@
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool, text
 
+from alembic import context
 from src.core.config import get_settings
 from src.core.db import Base
 from src.models import (  # noqa: F401 — register models
-    L1WorkingMemory,
+    L0WorkingMemory,
+    L1Reference,
     L2MetaMemory,
     L3DistilledKnowledge,
     L4RawEvent,

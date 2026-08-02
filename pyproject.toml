@@ -17,7 +17,6 @@ dependencies = [
     "mcp>=1.1.0",
     "apscheduler>=3.10.4",
     "tenacity>=9.0.0",
-    "sse-starlette>=2.1.0",
     "python-dotenv>=1.0.1",
 ]
 
@@ -39,6 +38,14 @@ packages = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = [
+    "B008",  # FastAPI's `Depends(...)` as a default arg is the documented idiom, not a bug
+]
 
 [dependency-groups]
 dev = [

@@ -67,7 +67,11 @@ async def query_deep_memory_sql(
             text(scoped),
             {"project_path": project_path},
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 — query shape is caller-supplied; the fallback below handles it
+        # Postgres aborts the whole transaction on any statement error — must roll
+        # back before issuing the fallback query on this same session, or the retry
+        # below fails immediately with InFailedSQLTransactionError.
+        await session.rollback()
         # If subquery projection lacks project_path column, fall back to raw limited query
         # but still bind project_path into a wrapper that filters L4 table alias if present.
         # Prefer injecting WHERE project_path = :project_path when possible.
@@ -105,7 +109,9 @@ async def query_deep_memory_sql(
                 sanitized_row[key] = sanitize_and_truncate(value)
             else:
                 sanitized_row[key] = (
-                    str(value) if value is not None and not isinstance(value, (int, float, bool)) else value
+                    str(value)
+                    if value is not None and not isinstance(value, (int, float, bool))
+                    else value
                 )
         rows.append(sanitized_row)
 

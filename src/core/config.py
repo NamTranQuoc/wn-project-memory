@@ -19,7 +19,6 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     litellm_api_base: str | None = None
-    distillation_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
 
