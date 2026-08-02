@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "agentic-memory": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/Users/namtran/personal/project/wn-project-memory",
+        "run",
+        "python",
+        "-m",
+        "src.mcp_server"
+      ],
+      "cwd": "/Users/namtran/personal/project/wn-project-memory"
+    }
+  }
+}

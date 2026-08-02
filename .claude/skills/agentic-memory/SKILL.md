@@ -1,3 +1,12 @@
+---
+name: agentic-memory
+description: >
+  Use Hierarchical Project Memory via MCP for project-specific architectural
+  decisions, conventions, and operational context. Apply when entering a project,
+  before structural changes, when learning from feedback/bug fixes, or when
+  truncated memory results need full raw context.
+---
+
 # AGENTIC MEMORY SKILL INTEGRATION
 
 You are connected to a Hierarchical Project Memory via MCP. This memory tracks architectural decisions, conventions, and context specific to this local project path.

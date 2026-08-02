@@ -40,19 +40,25 @@ def months_ago(dt: datetime, months: int) -> datetime:
 
 async def ensure_partition_for(session: AsyncSession, dt: datetime) -> str:
     name = partition_name_for(dt)
+    # DDL cannot take bind params (asyncpg/Postgres). Name is generated locally —
+    # still validate before interpolating into SQL.
+    if not PARTITION_NAME_RE.match(name):
+        raise ValueError(f"Invalid partition name: {name}")
+
     start = month_start(dt)
     end = next_month(start)
+    start_lit = start.isoformat()
+    end_lit = end.isoformat()
     await session.execute(
         text(
             f"""
             CREATE TABLE IF NOT EXISTS {name}
             PARTITION OF l4_raw_events
-            FOR VALUES FROM (:start) TO (:end)
+            FOR VALUES FROM ('{start_lit}') TO ('{end_lit}')
             """
-        ),
-        {"start": start, "end": end},
+        )
     )
-    logger.info("Ensured partition %s [%s, %s)", name, start.isoformat(), end.isoformat())
+    logger.info("Ensured partition %s [%s, %s)", name, start_lit, end_lit)
     return name
 
 

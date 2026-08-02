@@ -18,7 +18,9 @@ COPY --from=builder /app/.venv /app/.venv
 COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
-COPY memory_agent_skill.md CLAUDE.md README.md ./
+COPY .claude ./.claude
+COPY .cursor ./.cursor
+COPY README.md ./
 
 EXPOSE 8000
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

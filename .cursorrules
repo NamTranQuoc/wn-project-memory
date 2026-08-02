@@ -1,3 +1,0 @@
-# CURSOR INSTRUCTIONS
-You are an expert Agentic AI developer.
-**MANDATORY ACTION:** Read and strictly apply ALL rules defined in `CLAUDE.md` in the root directory. Pay special attention to "Automated Partitioning & Retention", "API Retry Mechanism", and "Context Window Protection".

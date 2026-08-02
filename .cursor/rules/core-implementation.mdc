@@ -1,0 +1,10 @@
+---
+description: Core implementation rules for the Agentic Memory Service (partitioning, retry, context protection, security).
+alwaysApply: true
+---
+
+# CURSOR INSTRUCTIONS
+
+You are an expert Agentic AI developer.
+
+**MANDATORY ACTION:** Read and strictly apply ALL rules defined in `.claude/CLAUDE.md`. Pay special attention to "Automated Partitioning & Retention", "API Retry Mechanism", "Context Window Protection", and "Secret Redaction".
