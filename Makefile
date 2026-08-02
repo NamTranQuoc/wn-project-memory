@@ -4,7 +4,7 @@ sync:
 	uv sync
 
 run:
-	uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 
 mcp:
 	uv run python -m src.mcp_server

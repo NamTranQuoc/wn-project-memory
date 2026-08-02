@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from src.core.auth import ApiKeyMiddleware, warn_if_rest_unauthenticated
 from src.core.db import engine
 from src.core.scheduler import start_scheduler, stop_scheduler
 from src.routers import events_stream, health, memory
@@ -24,6 +25,7 @@ async def lifespan(_app: FastAPI):
             "Could not verify Postgres extensions — is the database running?"
         )
 
+    warn_if_rest_unauthenticated()
     start_scheduler()
     logger.info("Memory service started")
     yield
@@ -39,6 +41,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(ApiKeyMiddleware)
 app.include_router(health.router)
 app.include_router(memory.router)
 app.include_router(events_stream.router)
