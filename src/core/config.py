@@ -19,8 +19,8 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     litellm_api_base: str | None = None
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = 1536
+    embedding_model: str = "ollama/bge-m3"
+    embedding_dimensions: int = 1024
 
     # When set, REST requires X-API-Key or Authorization: Bearer. MCP stdio ignores this.
     memory_api_key: str = ""

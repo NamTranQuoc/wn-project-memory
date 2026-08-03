@@ -67,7 +67,7 @@ async def test_init_log_search_flow(session: AsyncSession) -> None:
     )
     assert "distillation_status" not in event
 
-    fake_embedding = [0.01] * 1536
+    fake_embedding = [0.01] * 1024
 
     # Agent extracts the fact itself and writes it directly — no distillation LLM call.
     await memory_service.upsert_distilled_rule(
@@ -135,7 +135,7 @@ async def test_ops_layer_sources_tasks_facts_watermarks(session: AsyncSession) -
     assert "user_session" in keys
     assert "pr_1097" in keys
 
-    fake_embedding = [0.02] * 1536
+    fake_embedding = [0.02] * 1024
     with (
         patch(
             "src.services.fact_service.embed_text",
@@ -217,7 +217,7 @@ async def test_l1_reference_service_and_watched_ref_status_note(
     init = await memory_service.init_project_memory(session, project, "L1 reference smoke")
     assert init["status"] == "initialized"
 
-    fake_embedding = [0.03] * 1536
+    fake_embedding = [0.03] * 1024
     long_roster = "| Name | GitHub | Teams |\n| --- | --- | --- |\n| Nam | nq | n@x.com |\n" + (
         "x" * 2000
     )

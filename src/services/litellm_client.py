@@ -2,6 +2,11 @@ import logging
 import os
 from typing import Any
 
+# litellm fetches a public model-pricing JSON from GitHub on import unless this is
+# set — we never use its cost-tracking features, so force the bundled local copy
+# instead of a network call every process start. Must be set before `import litellm`.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 import litellm
 from tenacity import (
     retry,
