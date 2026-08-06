@@ -47,6 +47,40 @@ class TestLitellmApiBaseValidation:
         assert Settings(litellm_api_base="").litellm_api_base is None
 
 
+class TestEmbeddingApiBaseValidation:
+    def test_localhost_http_allowed(self) -> None:
+        s = Settings(embedding_api_base="http://localhost:11434")
+        assert s.embedding_api_base == "http://localhost:11434"
+
+    def test_remote_http_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="http is only allowed"):
+            Settings(embedding_api_base="http://evil.example.com:11434")
+
+    def test_empty_becomes_none(self) -> None:
+        assert Settings(embedding_api_base="").embedding_api_base is None
+
+    def test_direct_defaults_base_when_unset(self) -> None:
+        s = Settings(embedding_direct=True, embedding_api_base=None, litellm_api_base=None)
+        assert s.embedding_api_base == "http://localhost:11434"
+        assert s.resolved_embedding_api_base() == "http://localhost:11434"
+
+    def test_resolved_prefers_embedding_api_base(self) -> None:
+        s = Settings(
+            embedding_direct=True,
+            embedding_api_base="http://127.0.0.1:11434",
+            litellm_api_base="http://localhost:4000",
+        )
+        assert s.resolved_embedding_api_base() == "http://127.0.0.1:11434"
+
+    def test_resolved_falls_back_to_litellm_base(self) -> None:
+        s = Settings(
+            embedding_direct=True,
+            embedding_api_base=None,
+            litellm_api_base="http://localhost:11434",
+        )
+        assert s.resolved_embedding_api_base() == "http://localhost:11434"
+
+
 class TestApiKeyMiddleware:
     def setup_method(self) -> None:
         get_settings.cache_clear()

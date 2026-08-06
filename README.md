@@ -160,7 +160,7 @@ Callers always pass **`project_path`** (absolute path of the consumer project). 
 ## Prerequisites
 - [uv](https://docs.astral.sh/uv/) installed
 - Docker (for Postgres + pgvector)
-- An OpenAI-compatible API key (used via LiteLLM for embeddings) — can point at a local embedding model instead
+- An embedding backend (see below) — default local setup uses Ollama `bge-m3` (1024-dim)
 
 ## Installation & Setup
 
@@ -172,9 +172,20 @@ make db-up
 ### 2. Sync Dependencies & Configure
 ```bash
 make sync
-cp .env.example .env   # Add OPENAI_API_KEY; set MEMORY_API_KEY before any remote REST exposure
+cp .env.example .env   # Configure embedding; set MEMORY_API_KEY before any remote REST exposure
 make migrate
 ```
+
+**Embedding config** (from `.env` / `.env.example`):
+
+| Mode | Key settings |
+| --- | --- |
+| **Direct Ollama** (bypass LiteLLM) | `EMBEDDING_DIRECT=true`, `EMBEDDING_API_BASE=http://localhost:11434`, `EMBEDDING_MODEL=ollama/bge-m3`, `EMBEDDING_DIMENSIONS=1024` |
+| **Via LiteLLM** (default in `.env.example`) | `EMBEDDING_DIRECT=false`, `LITELLM_API_BASE=…`, same model vars; or OpenAI: `OPENAI_API_KEY=sk-…`, `EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_DIMENSIONS=1536` |
+
+When `EMBEDDING_DIRECT=true`, the service calls Ollama native `POST /api/embeddings` (provider prefix before the first `/` is stripped, e.g. `ollama/bge-m3` → `bge-m3`). Base URL resolve order: `EMBEDDING_API_BASE` → `LITELLM_API_BASE` → `http://localhost:11434`. `http` base URLs are only allowed on loopback; remote endpoints must use `https`.
+
+Changing `EMBEDDING_DIMENSIONS` requires a matching DB vector column size (see Alembic migrations) — do not mix spaces from different models without re-embedding.
 
 **Security notes (REST vs MCP):**
 - **MCP stdio** (`make mcp`) is a local process trust boundary — no network listener.
@@ -233,7 +244,7 @@ Do all of the following for me (edit files yourself; ask me only if a path is mi
 
 3) Prerequisites I already handle outside the editor (mention if missing, do not invent secrets):
    - Postgres for the memory service is up
-   - `.env` in the memory repo has `LITELLM_API_BASE` / models set
+   - `.env` in the memory repo has embedding configured (`EMBEDDING_DIRECT` / `EMBEDDING_API_BASE` or LiteLLM + models)
    - I can run `make mcp` manually to smoke-test, but prefer editor-managed stdio via the MCP config you write
 
 4) After wiring, follow the agentic-memory skill: on first use call `init_project_memory` with this project's absolute path, then `get_active_policies` (treat any result as binding for the session), then use `search_memory` / `log_raw_event` / `update_working_memory` as appropriate.
