@@ -1,9 +1,15 @@
-# Environment
+# Environment / secrets
 .env
-.venv/
-venv/
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials.json
 
 # Python
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,12 +26,14 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# IDE
+# IDE / editor local
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
+.claude/settings.local.json
+.cursor/mcp.json
 
 # Docker volumes
 pgdata/

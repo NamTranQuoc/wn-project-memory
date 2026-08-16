@@ -269,8 +269,8 @@ Do all of the following for me (edit files yourself; ask me only if a path is mi
    (Cursor may use the same content under `.cursor/skills/agentic-memory/SKILL.md`)
 
 2) Register an MCP server named `agentic-memory` that runs stdio against the local memory repo.
-   Absolute path to the memory service repo (replace if different on my machine):
-   `/Users/namtran/personal/project/wn-project-memory`
+   Absolute path to the memory service repo (replace with the clone on this machine):
+   `/absolute/path/to/wn-project-memory`
    Command:
    - cwd: that repo path
    - command: `uv`

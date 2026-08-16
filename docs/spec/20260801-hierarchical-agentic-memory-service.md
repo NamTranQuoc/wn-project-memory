@@ -7,7 +7,7 @@ source: spec-memory-agent.md
 
 # MÔ TẢ TRIỂN KHAI: HIERARCHICAL AGENTIC MEMORY SERVICE
 
-Hệ thống là một Agentic Memory Service chạy độc lập, giao tiếp với các LLM Editor (Cursor, Claude Code) thông qua Model Context Protocol (MCP) và cung cấp REST API/SSE để nạp dữ liệu ngoại vi. Trọng tâm là quản lý "ngữ cảnh vận hành", định tuyến chính xác theo từng thư mục dự án (VD: `/workspace/techx/agentic-ai-solution`).
+Hệ thống là một Agentic Memory Service chạy độc lập, giao tiếp với các LLM Editor (Cursor, Claude Code) thông qua Model Context Protocol (MCP) và cung cấp REST API/SSE để nạp dữ liệu ngoại vi. Trọng tâm là quản lý "ngữ cảnh vận hành", định tuyến chính xác theo từng thư mục dự án (VD: `/workspace/my-org/my-project`).
 
 ---
 
