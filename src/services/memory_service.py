@@ -13,6 +13,7 @@ from src.services.sanitize import sanitize_and_truncate
 from src.services.source_service import (
     register_data_source,
     resolve_source_id,
+    seed_legacy_unattributed_source,
     seed_user_session_source,
 )
 
@@ -58,6 +59,7 @@ async def init_project_memory(
         l0.project_id = project.id
 
     await seed_user_session_source(session, project_id=project.id, project_path=project_path)
+    await seed_legacy_unattributed_source(session, project_id=project.id, project_path=project_path)
 
     registered_sources: list[dict] = []
     for src in sources or []:
@@ -117,6 +119,24 @@ async def update_working_memory(
     }
 
 
+def _rule_to_dict(row: L3DistilledKnowledge, *, action: str | None = None) -> dict:
+    payload = {
+        "id": str(row.id),
+        "project_id": str(row.project_id),
+        "project_path": row.project_path,
+        "source_id": str(row.source_id),
+        "entity_key": row.entity_key,
+        "content": sanitize_and_truncate(row.content),
+        "content_hash": row.content_hash,
+        "source_hash": row.source_hash,
+        "raw_event_id": str(row.raw_event_id) if row.raw_event_id else None,
+        "last_verified_at": (row.last_verified_at.isoformat() if row.last_verified_at else None),
+    }
+    if action is not None:
+        payload["action"] = action
+    return payload
+
+
 async def upsert_distilled_rule(
     session: AsyncSession,
     project_path: str,
@@ -124,10 +144,22 @@ async def upsert_distilled_rule(
     content: str,
     raw_event_id: uuid.UUID | str | None,
     source_hash: str,
+    *,
+    source_key: str | None = None,
     embedding: list[float] | None = None,
 ) -> dict:
     """Upsert L3 rule. Overwrite when content_hash or source_hash changes."""
+    if not entity_key or not entity_key.strip():
+        raise ValueError("entity_key is required")
+    entity_key = entity_key.strip()
+
     project = await get_or_create_project(session, project_path)
+    source_id = await resolve_source_id(
+        session, project_path, source_key, fallback_user_session=True
+    )
+    if source_id is None:
+        raise ValueError("source_id is required for distilled rules")
+
     content_hash = compute_content_hash(content)
     event_id: uuid.UUID | None = None
     if raw_event_id is not None:
@@ -147,6 +179,7 @@ async def upsert_distilled_rule(
         row = L3DistilledKnowledge(
             project_id=project.id,
             project_path=project_path,
+            source_id=source_id,
             entity_key=entity_key,
             content=content,
             content_hash=content_hash,
@@ -157,20 +190,12 @@ async def upsert_distilled_rule(
         )
         session.add(row)
         await session.flush()
-        return {
-            "action": "created",
-            "id": str(row.id),
-            "project_id": str(project.id),
-            "entity_key": entity_key,
-            "content": sanitize_and_truncate(content),
-            "content_hash": content_hash,
-            "source_hash": source_hash,
-            "raw_event_id": str(event_id) if event_id else None,
-        }
+        return _rule_to_dict(row, action="created")
 
     hashes_changed = existing.content_hash != content_hash or existing.source_hash != source_hash
     if hashes_changed:
         existing.project_id = project.id
+        existing.source_id = source_id
         existing.content = content
         existing.content_hash = content_hash
         existing.source_hash = source_hash
@@ -179,29 +204,83 @@ async def upsert_distilled_rule(
             existing.embedding = embedding
         existing.last_verified_at = datetime.now(timezone.utc)
         await session.flush()
-        return {
-            "action": "overwritten",
-            "id": str(existing.id),
-            "project_id": str(project.id),
-            "entity_key": entity_key,
-            "content": sanitize_and_truncate(content),
-            "content_hash": content_hash,
-            "source_hash": source_hash,
-            "raw_event_id": str(event_id) if event_id else None,
-        }
+        return _rule_to_dict(existing, action="overwritten")
 
     existing.project_id = project.id
+    existing.source_id = source_id
     existing.last_verified_at = datetime.now(timezone.utc)
     await session.flush()
+    return _rule_to_dict(existing, action="unchanged")
+
+
+async def get_distilled_rule(
+    session: AsyncSession,
+    project_path: str,
+    entity_key: str,
+) -> dict:
+    result = await session.execute(
+        select(L3DistilledKnowledge).where(
+            L3DistilledKnowledge.project_path == project_path,
+            L3DistilledKnowledge.entity_key == entity_key,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return {"error": "not_found", "entity_key": entity_key}
+    return _rule_to_dict(row)
+
+
+async def delete_distilled_rule(
+    session: AsyncSession,
+    project_path: str,
+    entity_key: str,
+) -> dict:
+    from src.models import L3Fact, L3Task, L3WatchedRef, L3Watermark
+
+    result = await session.execute(
+        select(L3DistilledKnowledge).where(
+            L3DistilledKnowledge.project_path == project_path,
+            L3DistilledKnowledge.entity_key == entity_key,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return {"error": "not_found", "entity_key": entity_key}
+    payload = _rule_to_dict(row, action="deleted")
+    for model in (L3Fact, L3Task, L3WatchedRef, L3Watermark):
+        await session.execute(
+            model.__table__.update()
+            .where(model.l3_entity_id == row.id)
+            .values(l3_entity_id=None)
+        )
+    await session.delete(row)
+    await session.flush()
+    return payload
+
+
+async def list_distilled_rules(
+    session: AsyncSession,
+    project_path: str,
+    *,
+    limit: int | None = None,
+) -> dict:
+    from src.core.config import get_settings
+
+    settings = get_settings()
+    capped = settings.default_search_limit if limit is None else max(
+        1, min(int(limit), settings.max_search_limit)
+    )
+    result = await session.execute(
+        select(L3DistilledKnowledge)
+        .where(L3DistilledKnowledge.project_path == project_path)
+        .order_by(L3DistilledKnowledge.last_verified_at.desc())
+        .limit(capped)
+    )
+    rows = [_rule_to_dict(r) for r in result.scalars().all()]
     return {
-        "action": "unchanged",
-        "id": str(existing.id),
-        "project_id": str(project.id),
-        "entity_key": entity_key,
-        "content": sanitize_and_truncate(existing.content),
-        "content_hash": existing.content_hash,
-        "source_hash": existing.source_hash,
-        "raw_event_id": str(existing.raw_event_id) if existing.raw_event_id else None,
+        "project_path": project_path,
+        "count": len(rows),
+        "rules": rows,
     }
 
 

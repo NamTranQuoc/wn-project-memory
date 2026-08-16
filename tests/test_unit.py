@@ -110,3 +110,48 @@ class TestPartitionDateMath:
         dt = datetime(2026, 8, 1, tzinfo=timezone.utc)
         assert months_ago(dt, 6) == datetime(2026, 2, 1, tzinfo=timezone.utc)
         assert months_ago(dt, 8) == datetime(2025, 12, 1, tzinfo=timezone.utc)
+
+
+class TestReindexProtection:
+    def test_protected_keys_and_types(self) -> None:
+        from types import SimpleNamespace
+
+        from src.models import SourceType
+        from src.services.source_service import (
+            LEGACY_UNATTRIBUTED_KEY,
+            USER_SESSION_KEY,
+            is_protected_reindex_source,
+        )
+
+        assert is_protected_reindex_source(
+            SimpleNamespace(source_key=USER_SESSION_KEY, source_type=SourceType.other)
+        )
+        assert is_protected_reindex_source(
+            SimpleNamespace(
+                source_key=LEGACY_UNATTRIBUTED_KEY, source_type=SourceType.other
+            )
+        )
+        assert is_protected_reindex_source(
+            SimpleNamespace(source_key="local_plans", source_type=SourceType.local_file)
+        )
+        assert not is_protected_reindex_source(
+            SimpleNamespace(source_key="teams_war_room", source_type=SourceType.teams_chat)
+        )
+
+
+@pytest.mark.asyncio
+async def test_fact_key_required() -> None:
+    from unittest.mock import MagicMock
+
+    from src.services import fact_service
+
+    session = MagicMock()
+    with pytest.raises(ValueError, match="fact_key is required"):
+        await fact_service.upsert_fact(
+            session,
+            "/tmp/x",
+            fact_key="  ",
+            kind="fact",
+            title="t",
+            content="c",
+        )

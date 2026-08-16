@@ -27,9 +27,10 @@ def _row_to_dict(row: L3Fact, score: float | None = None) -> dict:
         "id": str(row.id),
         "project_id": str(row.project_id),
         "project_path": row.project_path,
-        "source_id": str(row.source_id) if row.source_id else None,
+        "source_id": str(row.source_id),
         "raw_event_id": str(row.raw_event_id) if row.raw_event_id else None,
         "l3_entity_id": str(row.l3_entity_id) if row.l3_entity_id else None,
+        "fact_key": row.fact_key,
         "kind": row.kind.value,
         "title": sanitize_and_truncate(row.title),
         "content": sanitize_and_truncate(row.content),
@@ -50,6 +51,7 @@ async def upsert_fact(
     session: AsyncSession,
     project_path: str,
     *,
+    fact_key: str,
     kind: str,
     title: str,
     content: str,
@@ -61,8 +63,11 @@ async def upsert_fact(
     l3_entity_id: uuid.UUID | str | None = None,
     source_hash: str | None = None,
     embedding: list[float] | None = None,
-    fact_id: uuid.UUID | str | None = None,
 ) -> dict:
+    if not fact_key or not str(fact_key).strip():
+        raise ValueError("fact_key is required")
+    fact_key = str(fact_key).strip()
+
     project = await get_or_create_project(session, project_path)
     try:
         fact_kind = FactKind(kind)
@@ -72,6 +77,9 @@ async def upsert_fact(
     source_id = await resolve_source_id(
         session, project_path, source_key, fallback_user_session=True
     )
+    if source_id is None:
+        raise ValueError("source_id is required for facts")
+
     event_id = None
     if raw_event_id is not None:
         event_id = (
@@ -89,26 +97,18 @@ async def upsert_fact(
     if when is None:
         when = datetime.now(timezone.utc)
 
-    content_hash = compute_content_hash(f"{fact_kind.value}:{title}:{content}")
+    content_hash = compute_content_hash(f"{fact_key}:{fact_kind.value}:{title}:{content}")
     hash_value = source_hash or compute_source_hash(content)
     if embedding is None:
         embedding = await embed_text(f"{title}\n{content}")
 
-    existing = None
-    if fact_id is not None:
-        fid = fact_id if isinstance(fact_id, uuid.UUID) else uuid.UUID(str(fact_id))
-        result = await session.execute(
-            select(L3Fact).where(L3Fact.id == fid, L3Fact.project_path == project_path)
+    result = await session.execute(
+        select(L3Fact).where(
+            L3Fact.project_id == project.id,
+            L3Fact.fact_key == fact_key,
         )
-        existing = result.scalar_one_or_none()
-    elif entity_id is not None:
-        result = await session.execute(
-            select(L3Fact).where(
-                L3Fact.project_path == project_path,
-                L3Fact.l3_entity_id == entity_id,
-            )
-        )
-        existing = result.scalar_one_or_none()
+    )
+    existing = result.scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
     if existing is None:
@@ -118,6 +118,7 @@ async def upsert_fact(
             source_id=source_id,
             raw_event_id=event_id,
             l3_entity_id=entity_id,
+            fact_key=fact_key,
             kind=fact_kind,
             title=title,
             content=content,
@@ -155,10 +156,41 @@ async def upsert_fact(
         out["action"] = "overwritten"
         return out
 
+    existing.source_id = source_id
     existing.updated_at = now
     await session.flush()
     out = _row_to_dict(existing)
     out["action"] = "unchanged"
+    return out
+
+
+async def get_fact(session: AsyncSession, project_path: str, fact_key: str) -> dict:
+    result = await session.execute(
+        select(L3Fact).where(
+            L3Fact.project_path == project_path,
+            L3Fact.fact_key == fact_key,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return {"error": "not_found", "fact_key": fact_key}
+    return _row_to_dict(row)
+
+
+async def delete_fact(session: AsyncSession, project_path: str, fact_key: str) -> dict:
+    result = await session.execute(
+        select(L3Fact).where(
+            L3Fact.project_path == project_path,
+            L3Fact.fact_key == fact_key,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return {"error": "not_found", "fact_key": fact_key}
+    out = _row_to_dict(row)
+    out["action"] = "deleted"
+    await session.delete(row)
+    await session.flush()
     return out
 
 

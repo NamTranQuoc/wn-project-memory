@@ -73,6 +73,8 @@ async def upsert_task(
     source_id = await resolve_source_id(
         session, project_path, source_key, fallback_user_session=True
     )
+    if source_id is None:
+        raise ValueError("source_id is required for tasks")
     event_id = None
     if raw_event_id is not None:
         event_id = (
@@ -131,26 +133,34 @@ async def upsert_task(
         out["action"] = "created"
         return out
 
-    existing.title = title
-    existing.content = content
-    existing.status = task_status
-    existing.priority = int(priority)
-    existing.waiting_on = waiting_on
-    existing.since_at = when
+    if existing.content_hash != content_hash or existing.source_hash != hash_value:
+        existing.title = title
+        existing.content = content
+        existing.status = task_status
+        existing.priority = int(priority)
+        existing.waiting_on = waiting_on
+        existing.since_at = when
+        existing.source_id = source_id
+        existing.raw_event_id = event_id if event_id is not None else existing.raw_event_id
+        existing.l3_entity_id = entity_id if entity_id is not None else existing.l3_entity_id
+        existing.content_hash = content_hash
+        existing.source_hash = hash_value
+        existing.embedding = embedding
+        if task_status == TaskStatus.closed and existing.closed_at is None:
+            existing.closed_at = now
+        if task_status != TaskStatus.closed:
+            existing.closed_at = None
+        existing.updated_at = now
+        await session.flush()
+        out = _row_to_dict(existing)
+        out["action"] = "overwritten"
+        return out
+
     existing.source_id = source_id
-    existing.raw_event_id = event_id if event_id is not None else existing.raw_event_id
-    existing.l3_entity_id = entity_id if entity_id is not None else existing.l3_entity_id
-    existing.content_hash = content_hash
-    existing.source_hash = hash_value
-    existing.embedding = embedding
-    if task_status == TaskStatus.closed and existing.closed_at is None:
-        existing.closed_at = now
-    if task_status != TaskStatus.closed:
-        existing.closed_at = None
     existing.updated_at = now
     await session.flush()
     out = _row_to_dict(existing)
-    out["action"] = "updated"
+    out["action"] = "unchanged"
     return out
 
 

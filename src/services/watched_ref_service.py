@@ -77,6 +77,8 @@ async def upsert_watched_ref(
     source_id = await resolve_source_id(
         session, project_path, source_key, fallback_user_session=True
     )
+    if source_id is None:
+        raise ValueError("source_id is required for watched refs")
     event_id = None
     if raw_event_id is not None:
         event_id = (
@@ -131,21 +133,35 @@ async def upsert_watched_ref(
         out["action"] = "created"
         return out
 
-    existing.why = why if why is not None else existing.why
-    existing.status_note = status_note if status_note is not None else existing.status_note
-    existing.disposition = disp
+    next_why = why if why is not None else existing.why
+    next_status_note = status_note if status_note is not None else existing.status_note
+    next_hash = compute_content_hash(
+        f"{rtype.value}:{ref_value}:{next_why or ''}:{next_status_note or ''}:{disp.value}"
+    )
+    if existing.content_hash != next_hash or existing.source_hash != hash_value:
+        existing.why = next_why
+        existing.status_note = next_status_note
+        existing.disposition = disp
+        existing.last_seen_at = now
+        existing.source_id = source_id
+        existing.raw_event_id = event_id if event_id is not None else existing.raw_event_id
+        existing.l3_entity_id = entity_id if entity_id is not None else existing.l3_entity_id
+        existing.content_hash = next_hash
+        existing.source_hash = hash_value
+        if embedding is not None:
+            existing.embedding = embedding
+        existing.updated_at = now
+        await session.flush()
+        out = _row_to_dict(existing)
+        out["action"] = "overwritten"
+        return out
+
     existing.last_seen_at = now
     existing.source_id = source_id
-    existing.raw_event_id = event_id if event_id is not None else existing.raw_event_id
-    existing.l3_entity_id = entity_id if entity_id is not None else existing.l3_entity_id
-    existing.content_hash = content_hash
-    existing.source_hash = hash_value
-    if embedding is not None:
-        existing.embedding = embedding
     existing.updated_at = now
     await session.flush()
     out = _row_to_dict(existing)
-    out["action"] = "updated"
+    out["action"] = "unchanged"
     return out
 
 

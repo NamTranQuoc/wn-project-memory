@@ -259,6 +259,9 @@ class L3DistilledKnowledge(Base):
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )
     project_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
+    )
     entity_key: Mapped[str] = mapped_column(String(512), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -276,6 +279,7 @@ class L3DistilledKnowledge(Base):
         UniqueConstraint("project_path", "entity_key", name="uq_l3_project_entity"),
         Index("ix_l3_project_path", "project_path"),
         Index("ix_l3_project_id", "project_id"),
+        Index("ix_l3_source_id", "source_id"),
         Index("ix_l3_raw_event_id", "raw_event_id"),
         Index("ix_l3_content_hash", "content_hash"),
         Index("ix_l3_source_hash", "source_hash"),
@@ -454,13 +458,14 @@ class L3Fact(Base):
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )
     project_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    source_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
     )
     raw_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     l3_entity_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("l3_distilled_knowledge.id"), nullable=True
     )
+    fact_key: Mapped[str] = mapped_column(String(512), nullable=False)
     kind: Mapped[FactKind] = mapped_column(
         Enum(
             FactKind,
@@ -498,8 +503,10 @@ class L3Fact(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("project_id", "fact_key", name="uq_l3_facts_project_key"),
         Index("ix_l3_facts_project_id", "project_id"),
         Index("ix_l3_facts_project_path", "project_path"),
+        Index("ix_l3_facts_fact_key", "fact_key"),
         Index("ix_l3_facts_kind", "kind"),
         Index("ix_l3_facts_project_occurred", "project_id", "occurred_at"),
         Index("ix_l3_facts_project_priority", "project_id", "priority"),
@@ -530,8 +537,8 @@ class L3Task(Base):
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )
     project_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    source_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
     )
     raw_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     l3_entity_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -607,8 +614,8 @@ class L3WatchedRef(Base):
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )
     project_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    source_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
     )
     raw_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     l3_entity_id: Mapped[uuid.UUID | None] = mapped_column(

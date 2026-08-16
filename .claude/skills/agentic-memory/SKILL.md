@@ -29,7 +29,7 @@ You are connected to a Hierarchical Project Memory via MCP. This memory tracks a
 1. **Memory-first (default):** Before calling live Teams/GitHub/Jira APIs, search memory — `search_memory`, `search_facts`, `search_l1_references`, `list_tasks`, `list_watched_refs`, and when needed `query_deep_memory_sql` / `get_raw_context`. Do **not** re-grep or re-search live message APIs for content already indexed. Call live APIs only when (a) user explicitly requires a fresh read, (b) watermark / ledger says coverage is incomplete for that stream, or (c) you detected a hash/content change that must be re-fetched.
 2. **Handle Truncated Outputs:** If a search result ends with `... [truncated]`, use `get_raw_context` with the provided `raw_event_id` to retrieve the rest.
 3. **Optimized SQL Queries:** When calling `query_deep_memory_sql`, ALWAYS include a `created_at` time-range. The backend drops L4 data older than 6 months. Durable dedup lives in the source-unit ledger (`check_source_units` / `get_source_unit`), not in L4 alone.
-4. **Continuous Learning:** For live chat decisions use `log_raw_event` (`user_session`). For crawled external units use **`ingest_source_unit`** (idempotent ledger + L4). Then write structured rows yourself — `upsert_fact` / `upsert_task` / `upsert_watched_ref` / `upsert_distilled_rule` — passing `raw_event_id` and `source_hash` from the ingest/log result. There is no automatic distillation LLM.
+4. **Continuous Learning:** For live chat decisions use `log_raw_event` (`user_session`). For crawled external units use **`ingest_source_unit`** (idempotent ledger + L4). Then write structured rows yourself — `upsert_fact` (required stable `fact_key`) / `upsert_task` / `upsert_watched_ref` / `upsert_distilled_rule` (`entity_key`) — passing `source_key`, `raw_event_id`, and `source_hash` from the ingest/log result. L3 is **current state**: one business key = one row; reuse the key to overwrite in place. Never invent a second key just because wording changed. There is no automatic distillation LLM.
 5. **Working Memory (L0):** Use `update_working_memory` for session focus only — never policy, rules, or durable facts.
 5b. **L1 References:** Use `upsert_l1_reference` / `get_l1_reference` / `list_l1_references` / `search_l1_references` for named curated docs (roster, seat DoD, source read-recipe guide). Use L2 for short project-wide environment/structure prose, L3 for atomic distilled rules.
 6. **Data Sources:** Use `register_data_source` / `list_data_sources`. **When the user mentions a new source mid-session** (Teams link, PR URL, Jira key, repo path):
@@ -41,9 +41,11 @@ You are connected to a Hierarchical Project Memory via MCP. This memory tracks a
 7. **Operational Layer (L3-Ops):** Prefer typed tools:
    - Source units: `ingest_source_unit` / `check_source_units` / `get_source_unit`
    - Cursors: `upsert_watermark` / `get_watermark` / `list_watermarks`
-   - Facts: `upsert_fact` / `search_facts`
+   - Facts: `upsert_fact` / `get_fact` / `list_facts` / `search_facts` / `delete_fact` (delete only after approved legacy reconciliation)
+   - Rules: `upsert_distilled_rule` / `get_distilled_rule` / `list_distilled_rules` / `delete_distilled_rule`
    - Tasks: `upsert_task` / `close_task` / `list_tasks`
    - Watched refs: `upsert_watched_ref` / `list_watched_refs`
+   - Reindex: `preview_external_reindex` / `apply_external_reindex_reset` / `inventory_legacy_state`
 8. **Provenance:** Ops rows carry `source_id`, `raw_event_id`, and hashes — always pass them through from ingest. Re-read via `read_recipe` only when ledger/watermark says stale or user demands freshness.
 9. **Ingest / reindex:** Follow **§ Full ingest & reindex** below. The memory service does **not** fetch external systems — you execute each `read_recipe` with real tools (`gh`, Teams/M365 MCP, Jira, files), then ingest + write structured rows.
 10. **Policy / workflow ≠ L0:** Project-specific policy lives in L1 (`is_policy=true`). The consumer skill keeps the universal safety floor that stored policy can never relax.
@@ -129,12 +131,16 @@ For each active source from `list_data_sources` (except `user_session`):
 
 ### C) Full reindex
 
-1. Confirm with the user if destructive (preferred when wiping Ops data). Scope can be one `source_key` or the whole project.
-2. For each target source/stream: treat as cold start — **do not** trust the old watermark as a lower bound. Re-read from the recipe’s natural start (or a user-specified since date). Optionally note the prior cursor in `known_gaps`.
-3. Re-run **§B**. `ingest_source_unit` will return `unchanged` for stable units (no duplicate L4) and `changed` when content/hash differs.
-4. Overwrite watermarks with the new pass results.
-5. Soft-close contradicted tasks; correct facts in place.
-6. Coverage footer: state that this was a **reindex**, which sources, and remaining gaps.
+When the user paste/request includes **session write authorization** for this reindex (e.g. “write freely this session”, “không cần hỏi ghi”), treat every agentic-memory write in this procedure as already approved for the session. Do **not** pause for per-action write confirmation. Still obey hard bounds below.
+
+1. Inventory protected memory: L1/L2, policies, `user_session` / `local_file` / `legacy_unattributed`, tasks, watched refs, curated decisions. Never call `init_project_memory` (overwrites L2).
+2. `inventory_legacy_state` → build a reconciliation map (canonical keys, content, source, deletes). Under session write auth: apply it without waiting — upsert canonical rows first, verify, then `delete_fact` / `delete_distilled_rule` only for mapped `legacy:*` rows. Never delete an unresolved curated row that is not on the map.
+3. `preview_external_reindex` for external sources only → log counts in the coverage trail → immediately `apply_external_reindex_reset(confirm=true)`. Rejected sources: `user_session`, `local_file`, `legacy_unattributed`.
+4. Cold-read each external source via `read_recipe` — **do not** trust the old watermark as a lower bound. On 429/auth/partial failure: stop, record `known_gaps`, do not advance watermark.
+5. Re-run ingest (`ingest_source_unit`) + structured upserts with stable `fact_key` / `entity_key` / `task_key` / `(ref_type, ref_value)`.
+6. Overwrite watermarks only after successful stream passes. Coverage footer: state that this was a **reindex**, which sources, and remaining gaps.
+
+Without session write authorization, keep the older gate: show the reconciliation map and reindex preview, then wait for explicit user approval before apply/delete.
 
 ### D) After either pass
 

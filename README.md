@@ -8,7 +8,7 @@ A Hierarchical, Agentic Memory Service designed to attach to Claude Code or Curs
 - **Data sources registry:** declare where facts come from (GitHub PR, Teams, Jira, local files, live `user_session`) and how to re-read them.
 - **Incremental source-unit ledger:** durable per-unit dedup (`external_id` preferred, content hash fallback) so agents ingest only new/changed units without re-writing L4 duplicates.
 - **Hybrid Search:** pgvector + pg_trgm on L3 rules and L3-Ops facts/tasks/refs.
-- **Agent-driven writes:** the calling agent reads a raw event itself and writes structured L3/Ops rows directly (`upsert_fact`/`upsert_task`/`upsert_watched_ref`/`upsert_distilled_rule`) — no automatic LLM distillation pass.
+- **Agent-driven writes:** the calling agent reads a raw event itself and writes structured L3/Ops rows directly (`upsert_fact` with stable `fact_key` / `upsert_task` / `upsert_watched_ref` / `upsert_distilled_rule`) — one business key = one current row; no automatic LLM distillation pass.
 - **Context window protection:** sanitization, truncation (1500 chars), search/SQL hard limits.
 - **Auto retention:** L4 monthly partitions; drop partitions older than 6 months.
 
@@ -64,7 +64,7 @@ Live sources stay outside the database. The agent fetches them, registers `sourc
 | **L0** | `l0_working_memory` | **Session focus only** (`current_focus_text`). Not for policies, rules, or anything a future session needs to recover. | `update_working_memory` |
 | **L1** | `l1_references` | Curated reference docs, one row per named `ref_key` per project: rosters, seat commitments/DoD, source read-recipe guides, and **project-specific policy/workflow** (`is_policy=true` rows). | `upsert_l1_reference`, `get_l1_reference`, `list_l1_references`, `search_l1_references`, `get_active_policies` |
 | **L2** | `l2_meta_memory` | Project rules, conventions, structure (stable *data* context) | set at `init_project_memory` |
-| **L3** | `l3_distilled_knowledge` | Atomic distilled rules (semantic + keyword search) | `search_memory`, `upsert_distilled_rule` |
+| **L3** | `l3_distilled_knowledge` | Atomic distilled rules — **current state** keyed by `entity_key`; required `source_id` | `search_memory`, `upsert_distilled_rule`, get/list/delete by key |
 | **L3-Ops** | `l3_watermarks`, `l3_source_units`, `l3_facts`, `l3_tasks`, `l3_watched_refs` | Typed operational ledgers (cursors, durable source-unit dedup, decisions/plans, open-loops, watched refs) | watermark / source-unit / fact / task / watched-ref tools |
 | **L4** | `l4_raw_events` (partitioned) | Append-only raw payloads; 6-month retention | `log_raw_event`, `get_raw_context`, `query_deep_memory_sql` |
 | **Policy / workflow** | **L1** (`is_policy=true` rows), loaded every session via `get_active_policies` | Project-specific write-gates, phase rules, escalation contacts — one generic consumer skill loads whichever project's policy applies by switching `project_path`. The consumer skill still enforces the universal safety floor (write-class confirmation, no destructive action without approval) that stored policy can never relax. | `get_active_policies`, `upsert_l1_reference(..., is_policy=true)` |
@@ -115,7 +115,7 @@ flowchart LR
 | --- | --- | --- |
 | `l3_watermarks` | incremental cursors | Structured JSON cursors; **no** embedding; ordered by `checked_at`. Advance only after successful ingest. |
 | `l3_source_units` | durable ingest ledger | Per-unit identity (`external_id` → `item_key`, else content-hash key); stores `content_hash` + native `source_hash`; survives L4 retention |
-| `l3_facts` | journal / decisions | Single table + `kind`: `fact` \| `decision` \| `plan` \| `question` \| `issue` \| `solution`; order by date or priority; hybrid search |
+| `l3_facts` | journal / decisions | Stable `fact_key` unique per project; one current row; `kind`: `fact` \| `decision` \| `plan` \| `question` \| `issue` \| `solution`; required `source_id` |
 | `l3_tasks` | open-loops | Stable `task_key` (e.g. `O-28`); `open` / `partial` / `closed` |
 | `l3_watched_refs` | watched refs | PR / issue / SHA / path / ticket / tag; disposition `mine` \| `queued` \| `resolved`; `why` (tracking reason) and `status_note` (latest state) update independently |
 
@@ -172,7 +172,7 @@ Defined in the agentic-memory skill § *Full ingest & reindex*:
 
 - **Full ingest:** after init, for each active source except `user_session` → execute `read_recipe` → `ingest_source_unit` + Ops upserts → `upsert_watermark` (honest `indexed_through` vs `full_read_ids`) → coverage footer.
 - **Incremental (default):** watermark + source-unit ledger → newest-first page → stop at known unchanged boundary; Git compares native hashes before reading bodies.
-- **Full reindex:** cold-start re-read (ignore old cursor as lower bound), re-run ingest, overwrite watermarks, soft-close contradicted tasks; say it was a reindex in the coverage footer.
+- **Full reindex:** if the user grants **session write authorization**, run `preview_external_reindex` → `apply_external_reindex_reset(confirm=true)` → cold crawl → upsert → legacy reconcile without pausing for per-write asks (external sources only; never `user_session` / `local_file` / `legacy_unattributed`). Without that grant, show preview/map and wait for approval. Never call `init_project_memory` during reindex (it overwrites L2).
 
 ### Tool surface (MCP ↔ REST)
 
@@ -183,11 +183,12 @@ Defined in the agentic-memory skill § *Full ingest & reindex*:
 | Source units (incremental) | `ingest_source_unit`, `check_source_units`, `get_source_unit` | `POST …/source-units/ingest`, `POST …/source-units/check`, `GET …/source-units` |
 | Raw events | `log_raw_event`, `get_raw_context`, `query_deep_memory_sql` | `POST …/events`, `GET …/raw-events/{id}`, `POST …/sql` |
 | L1 references / policy | `upsert_l1_reference`, `get_l1_reference`, `list_l1_references`, `search_l1_references`, `get_active_policies` | `POST/GET …/l1-references`, `GET …/l1-references/{ref_key}`, `GET …/l1-references/search`, `GET …/l1-references/policies` |
-| L3 rules | `search_memory`, `upsert_distilled_rule` | `GET …/search`, `POST …/rules` |
+| L3 rules | `search_memory`, `upsert_distilled_rule`, `get_distilled_rule`, `list_distilled_rules`, `delete_distilled_rule` | `GET …/search`, `POST/GET …/rules`, `GET/DELETE …/rules/{entity_key}` |
 | Watermarks | `upsert_watermark`, `get_watermark`, `list_watermarks` | `PUT …/watermarks`, `GET …/watermarks`, `GET …/watermarks/{source_key}` |
-| Facts | `upsert_fact`, `search_facts` | `POST …/facts`, `GET …/facts/search` |
+| Facts | `upsert_fact`, `get_fact`, `list_facts`, `search_facts`, `delete_fact` | `POST/GET …/facts`, `GET …/facts/search`, `GET/DELETE …/facts/{fact_key}` |
 | Tasks | `upsert_task`, `close_task`, `list_tasks` | `POST …/tasks`, `POST …/tasks/{key}/close`, `GET …/tasks` |
 | Watched refs | `upsert_watched_ref`, `list_watched_refs` | `POST …/watched-refs`, `GET …/watched-refs` |
+| External reindex | `preview_external_reindex`, `apply_external_reindex_reset`, `inventory_legacy_state` | `POST …/reindex/preview`, `POST …/reindex/apply`, `GET …/legacy` |
 
 Callers always pass **`project_path`** (absolute path of the consumer project). The service resolves/creates `project_id` internally.
 
@@ -319,7 +320,8 @@ Do all of the following for me:
    - PATCH  `{BASE}/projects/{project_path}/working-memory`       body: {"current_focus_text":"..."}
    - POST/GET `{BASE}/projects/{project_path}/sources`
    - PUT/GET  `{BASE}/projects/{project_path}/watermarks`
-   - POST/GET `{BASE}/projects/{project_path}/facts` (+ `…/facts/search`)  body may include `raw_event_id`, `source_hash`
+   - POST/GET `{BASE}/projects/{project_path}/facts` (+ `…/facts/search`, `…/facts/{fact_key}`)  body requires `fact_key`; may include `raw_event_id`, `source_hash`
+   - POST/GET `{BASE}/projects/{project_path}/reindex/preview` and `…/reindex/apply` (confirm=true); `GET …/legacy`
    - POST/GET `{BASE}/projects/{project_path}/tasks` (+ `…/tasks/{key}/close`)
    - POST/GET `{BASE}/projects/{project_path}/watched-refs`        body accepts optional `status_note`, `raw_event_id`, `source_hash`
    - POST/GET `{BASE}/projects/{project_path}/l1-references` (+ `…/l1-references/{ref_key}`, `…/l1-references/search`, `…/l1-references/policies`)

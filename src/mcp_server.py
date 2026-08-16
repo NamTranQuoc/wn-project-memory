@@ -13,6 +13,7 @@ from src.services import (
     fact_service,
     l1_reference_service,
     memory_service,
+    reindex_service,
     search_service,
     source_service,
     source_unit_service,
@@ -66,16 +67,50 @@ async def upsert_distilled_rule(
     content: str,
     raw_event_id: str,
     source_hash: str,
+    source_key: str = "",
 ) -> str:
-    """Upsert an L3 distilled rule using dual-hash overwrite semantics."""
+    """Upsert an L3 distilled rule by stable entity_key (one current row per key)."""
     async with AsyncSessionLocal() as session:
-        result = await memory_service.upsert_distilled_rule(
-            session,
-            project_path=project_path,
-            entity_key=entity_key,
-            content=content,
-            raw_event_id=raw_event_id or None,
-            source_hash=source_hash,
+        try:
+            result = await memory_service.upsert_distilled_rule(
+                session,
+                project_path=project_path,
+                entity_key=entity_key,
+                content=content,
+                raw_event_id=raw_event_id or None,
+                source_hash=source_hash,
+                source_key=source_key or None,
+            )
+            await session.commit()
+            return _dump(result)
+        except ValueError as exc:
+            return _dump({"error": str(exc)})
+
+
+@mcp.tool()
+async def get_distilled_rule(project_path: str, entity_key: str) -> str:
+    """Get one L3 distilled rule by entity_key."""
+    async with AsyncSessionLocal() as session:
+        result = await memory_service.get_distilled_rule(session, project_path, entity_key)
+        await session.commit()
+        return _dump(result)
+
+
+@mcp.tool()
+async def delete_distilled_rule(project_path: str, entity_key: str) -> str:
+    """Delete one L3 distilled rule by entity_key (approved legacy reconciliation only)."""
+    async with AsyncSessionLocal() as session:
+        result = await memory_service.delete_distilled_rule(session, project_path, entity_key)
+        await session.commit()
+        return _dump(result)
+
+
+@mcp.tool()
+async def list_distilled_rules(project_path: str, limit: int = 5) -> str:
+    """List recent L3 distilled rules for a project."""
+    async with AsyncSessionLocal() as session:
+        result = await memory_service.list_distilled_rules(
+            session, project_path, limit=limit
         )
         await session.commit()
         return _dump(result)
@@ -383,6 +418,7 @@ async def list_watermarks(project_path: str) -> str:
 @mcp.tool()
 async def upsert_fact(
     project_path: str,
+    fact_key: str,
     kind: str,
     title: str,
     content: str,
@@ -393,12 +429,13 @@ async def upsert_fact(
     raw_event_id: str = "",
     source_hash: str = "",
 ) -> str:
-    """Upsert an operational fact (kind: fact/decision/plan/question/issue/solution)."""
+    """Upsert an operational fact by stable fact_key (one current row per key)."""
     async with AsyncSessionLocal() as session:
         try:
             result = await fact_service.upsert_fact(
                 session,
                 project_path,
+                fact_key=fact_key,
                 kind=kind,
                 title=title,
                 content=content,
@@ -408,6 +445,47 @@ async def upsert_fact(
                 source_key=source_key or None,
                 raw_event_id=raw_event_id or None,
                 source_hash=source_hash or None,
+            )
+            await session.commit()
+            return _dump(result)
+        except ValueError as exc:
+            return _dump({"error": str(exc)})
+
+
+@mcp.tool()
+async def get_fact(project_path: str, fact_key: str) -> str:
+    """Get one fact by fact_key."""
+    async with AsyncSessionLocal() as session:
+        result = await fact_service.get_fact(session, project_path, fact_key)
+        await session.commit()
+        return _dump(result)
+
+
+@mcp.tool()
+async def delete_fact(project_path: str, fact_key: str) -> str:
+    """Delete one fact by fact_key (approved legacy reconciliation only)."""
+    async with AsyncSessionLocal() as session:
+        result = await fact_service.delete_fact(session, project_path, fact_key)
+        await session.commit()
+        return _dump(result)
+
+
+@mcp.tool()
+async def list_facts(
+    project_path: str,
+    kind: str = "",
+    order_by: str = "occurred_at",
+    limit: int = 5,
+) -> str:
+    """List facts ordered by occurred_at or priority."""
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await fact_service.list_facts(
+                session,
+                project_path,
+                kind=kind or None,
+                order_by=order_by,
+                limit=limit,
             )
             await session.commit()
             return _dump(result)
@@ -440,6 +518,69 @@ async def search_facts(
             return _dump(result)
         except ValueError as exc:
             return _dump({"error": str(exc)})
+
+
+@mcp.tool()
+async def preview_external_reindex(
+    project_path: str,
+    source_keys_json: str = "[]",
+) -> str:
+    """Dry-run counts for clearing external-derived L3 state before cold reindex."""
+    try:
+        keys = json.loads(source_keys_json) if source_keys_json else []
+        if not isinstance(keys, list):
+            return _dump({"error": "source_keys_json must be a JSON array"})
+    except json.JSONDecodeError as exc:
+        return _dump({"error": f"invalid source_keys_json: {exc}"})
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await reindex_service.preview_external_reindex(
+                session,
+                project_path,
+                source_keys=keys or None,
+            )
+            await session.commit()
+            return _dump(result)
+        except ValueError as exc:
+            return _dump({"error": str(exc)})
+
+
+@mcp.tool()
+async def apply_external_reindex_reset(
+    project_path: str,
+    confirm: bool = False,
+    source_keys_json: str = "[]",
+) -> str:
+    """Clear external-derived source_units/watermarks/facts/rules. Requires confirm=true."""
+    try:
+        keys = json.loads(source_keys_json) if source_keys_json else []
+        if not isinstance(keys, list):
+            return _dump({"error": "source_keys_json must be a JSON array"})
+    except json.JSONDecodeError as exc:
+        return _dump({"error": f"invalid source_keys_json: {exc}"})
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await reindex_service.apply_external_reindex_reset(
+                session,
+                project_path,
+                source_keys=keys or None,
+                confirm=confirm,
+            )
+            await session.commit()
+            return _dump(result)
+        except ValueError as exc:
+            return _dump({"error": str(exc)})
+
+
+@mcp.tool()
+async def inventory_legacy_state(project_path: str, limit: int = 5) -> str:
+    """List legacy:* facts/rules and legacy_unattributed rows for reconciliation."""
+    async with AsyncSessionLocal() as session:
+        result = await reindex_service.inventory_legacy_state(
+            session, project_path, limit=limit
+        )
+        await session.commit()
+        return _dump(result)
 
 
 @mcp.tool()

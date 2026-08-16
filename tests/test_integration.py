@@ -133,6 +133,7 @@ async def test_ops_layer_sources_tasks_facts_watermarks(session: AsyncSession) -
     sources = await source_service.list_data_sources(session, project)
     keys = {s["source_key"] for s in sources["sources"]}
     assert "user_session" in keys
+    assert "legacy_unattributed" in keys
     assert "pr_1097" in keys
 
     fake_embedding = [0.02] * 1024
@@ -156,6 +157,7 @@ async def test_ops_layer_sources_tasks_facts_watermarks(session: AsyncSession) -
         fact = await fact_service.upsert_fact(
             session,
             project,
+            fact_key="decision:freeze-active",
             kind="decision",
             title="Freeze active",
             content="PHA-1 reconcile freeze bars feature merges",
@@ -163,6 +165,7 @@ async def test_ops_layer_sources_tasks_facts_watermarks(session: AsyncSession) -
             source_key="pr_1097",
         )
         assert fact["action"] == "created"
+        assert fact["fact_key"] == "decision:freeze-active"
         assert fact["source_id"]
 
         task = await task_service.upsert_task(
@@ -550,6 +553,7 @@ async def test_source_unit_idempotent_ingest_and_checks(session: AsyncSession) -
         fact = await fact_service.upsert_fact(
             session,
             project,
+            fact_key="decision:freeze-window",
             kind="decision",
             title="Freeze window",
             content="Ship freeze stays until Monday",
@@ -558,12 +562,14 @@ async def test_source_unit_idempotent_ingest_and_checks(session: AsyncSession) -
             source_hash=edited["source_hash"],
         )
         assert fact["action"] == "created"
+        assert fact["fact_key"] == "decision:freeze-window"
         assert fact["raw_event_id"] == edited["raw_event_id"]
         assert fact["source_hash"] == edited["source_hash"]
 
     sources = await source_service.list_data_sources(session, project)
     assert {s["source_key"] for s in sources["sources"]} >= {
         "user_session",
+        "legacy_unattributed",
         "teams_war_room",
         "repo_main",
     }
@@ -599,5 +605,227 @@ async def test_query_deep_memory_sql_fallback_when_project_path_not_selected(
     )
     assert result["count"] == 1
     assert result["rows"][0]["event_type"] == "feedback"
+
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_fact_key_overwrite_and_unchanged(session: AsyncSession) -> None:
+    from src.services import fact_service
+
+    project = f"/tmp/fact-key-project-{uuid.uuid4()}"
+    await memory_service.init_project_memory(session, project, "fact key smoke")
+    fake_embedding = [0.05] * 1024
+    with patch(
+        "src.services.fact_service.embed_text",
+        new_callable=AsyncMock,
+        return_value=fake_embedding,
+    ):
+        created = await fact_service.upsert_fact(
+            session,
+            project,
+            fact_key="decision:deploy-freeze",
+            kind="decision",
+            title="Freeze",
+            content="Freeze is on",
+            source_key="user_session",
+        )
+        assert created["action"] == "created"
+        assert created["fact_key"] == "decision:deploy-freeze"
+        fact_id = created["id"]
+
+        overwritten = await fact_service.upsert_fact(
+            session,
+            project,
+            fact_key="decision:deploy-freeze",
+            kind="decision",
+            title="Freeze",
+            content="Freeze is lifted",
+            source_key="user_session",
+        )
+        assert overwritten["action"] == "overwritten"
+        assert overwritten["id"] == fact_id
+        assert "lifted" in overwritten["content"]
+
+        unchanged = await fact_service.upsert_fact(
+            session,
+            project,
+            fact_key="decision:deploy-freeze",
+            kind="decision",
+            title="Freeze",
+            content="Freeze is lifted",
+            source_key="user_session",
+        )
+        assert unchanged["action"] == "unchanged"
+        assert unchanged["id"] == fact_id
+
+        got = await fact_service.get_fact(session, project, "decision:deploy-freeze")
+        assert got["id"] == fact_id
+        deleted = await fact_service.delete_fact(session, project, "decision:deploy-freeze")
+        assert deleted["action"] == "deleted"
+        missing = await fact_service.get_fact(session, project, "decision:deploy-freeze")
+        assert missing["error"] == "not_found"
+
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_external_reindex_reset_preserves_curated(session: AsyncSession) -> None:
+    from src.services import (
+        fact_service,
+        reindex_service,
+        source_service,
+        source_unit_service,
+        task_service,
+        watched_ref_service,
+        watermark_service,
+    )
+
+    project = f"/tmp/reindex-project-{uuid.uuid4()}"
+    await memory_service.init_project_memory(session, project, "reindex smoke")
+    await source_service.register_data_source(
+        session,
+        project,
+        source_key="teams_war_room",
+        source_type="teams_chat",
+        display_name="War room",
+        connection_config={"chat_id": "abc"},
+        read_recipe="list messages",
+        added_via="manual",
+    )
+    await source_service.register_data_source(
+        session,
+        project,
+        source_key="local_plans",
+        source_type="local_file",
+        display_name="Local plans",
+        connection_config={"path": "/tmp/plans"},
+        read_recipe="read files",
+        added_via="manual",
+    )
+
+    fake_embedding = [0.06] * 1024
+    with (
+        patch(
+            "src.services.fact_service.embed_text",
+            new_callable=AsyncMock,
+            return_value=fake_embedding,
+        ),
+        patch(
+            "src.services.task_service.embed_text",
+            new_callable=AsyncMock,
+            return_value=fake_embedding,
+        ),
+        patch(
+            "src.services.watched_ref_service.embed_text",
+            new_callable=AsyncMock,
+            return_value=fake_embedding,
+        ),
+    ):
+        unit = await source_unit_service.ingest_source_unit(
+            session,
+            project,
+            source_key="teams_war_room",
+            content="Decision from Teams: freeze Monday",
+            stream_key="messages",
+            external_id="msg-1",
+        )
+        assert unit["action"] == "created"
+
+        await fact_service.upsert_fact(
+            session,
+            project,
+            fact_key="decision:teams-freeze",
+            kind="decision",
+            title="Teams freeze",
+            content="Freeze Monday",
+            source_key="teams_war_room",
+            raw_event_id=unit["raw_event_id"],
+            source_hash=unit["source_hash"],
+        )
+        await memory_service.upsert_distilled_rule(
+            session,
+            project,
+            entity_key="rule:teams-freeze",
+            content="Freeze Monday from Teams",
+            raw_event_id=unit["raw_event_id"],
+            source_hash=unit["source_hash"],
+            source_key="teams_war_room",
+            embedding=fake_embedding,
+        )
+        await watermark_service.upsert_watermark(
+            session,
+            project,
+            source_key="teams_war_room",
+            stream_key="messages",
+            indexed_through={"message_id": "msg-1"},
+            full_read_ids=["msg-1"],
+        )
+        curated = await fact_service.upsert_fact(
+            session,
+            project,
+            fact_key="decision:session-chot",
+            kind="decision",
+            title="Curated",
+            content="User-session decision",
+            source_key="user_session",
+        )
+        task = await task_service.upsert_task(
+            session,
+            project,
+            task_key="O-99",
+            title="Keep me",
+            content="Protected task",
+        )
+        ref = await watched_ref_service.upsert_watched_ref(
+            session,
+            project,
+            ref_type="pr",
+            ref_value="1234",
+            why="keep watched",
+            disposition="mine",
+        )
+
+    with pytest.raises(ValueError, match="Protected"):
+        await reindex_service.preview_external_reindex(
+            session, project, source_keys=["user_session"]
+        )
+    with pytest.raises(ValueError, match="Protected"):
+        await reindex_service.preview_external_reindex(
+            session, project, source_keys=["local_plans"]
+        )
+    with pytest.raises(ValueError, match="confirm=true"):
+        await reindex_service.apply_external_reindex_reset(
+            session, project, source_keys=["teams_war_room"], confirm=False
+        )
+
+    preview = await reindex_service.preview_external_reindex(
+        session, project, source_keys=["teams_war_room"]
+    )
+    assert preview["mode"] == "preview"
+    assert preview["totals"]["facts"] >= 1
+    assert preview["preserved"]["tasks"] >= 1
+
+    applied = await reindex_service.apply_external_reindex_reset(
+        session, project, source_keys=["teams_war_room"], confirm=True
+    )
+    assert applied["mode"] == "applied"
+    assert applied["deleted"]["facts"] >= 1
+    assert applied["deleted"]["source_units"] >= 1
+
+    assert (await fact_service.get_fact(session, project, "decision:teams-freeze"))[
+        "error"
+    ] == "not_found"
+    kept = await fact_service.get_fact(session, project, "decision:session-chot")
+    assert kept["id"] == curated["id"]
+    tasks = await task_service.list_tasks(session, project)
+    assert any(t["task_key"] == "O-99" for t in tasks["tasks"])
+    refs = await watched_ref_service.list_watched_refs(session, project)
+    assert any(r["ref_value"] == "1234" for r in refs["watched_refs"])
+    assert task["task_key"] == "O-99"
+    assert ref["ref_value"] == "1234"
+
+    inventory = await reindex_service.inventory_legacy_state(session, project, limit=5)
+    assert inventory["legacy_source_key"] == "legacy_unattributed"
 
     await session.commit()

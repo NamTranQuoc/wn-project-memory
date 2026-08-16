@@ -13,6 +13,7 @@ from src.services import (
     fact_service,
     l1_reference_service,
     memory_service,
+    reindex_service,
     search_service,
     source_service,
     source_unit_service,
@@ -62,6 +63,7 @@ class UpsertRuleRequest(BaseModel):
     content: str
     raw_event_id: str | None = None
     source_hash: str
+    source_key: str | None = None
 
 
 class RegisterSourceRequest(BaseModel):
@@ -83,6 +85,7 @@ class WatermarkRequest(BaseModel):
 
 
 class FactRequest(BaseModel):
+    fact_key: str
     kind: str
     title: str
     content: str
@@ -92,6 +95,11 @@ class FactRequest(BaseModel):
     source_key: str | None = None
     raw_event_id: str | None = None
     source_hash: str | None = None
+
+
+class ReindexRequest(BaseModel):
+    source_keys: list[str] | None = None
+    confirm: bool = False
 
 
 class TaskRequest(BaseModel):
@@ -315,14 +323,57 @@ async def upsert_rule(
     body: UpsertRuleRequest,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return await memory_service.upsert_distilled_rule(
-        session,
-        project_path=_path(project_path),
-        entity_key=body.entity_key,
-        content=body.content,
-        raw_event_id=body.raw_event_id,
-        source_hash=body.source_hash,
+    try:
+        return await memory_service.upsert_distilled_rule(
+            session,
+            project_path=_path(project_path),
+            entity_key=body.entity_key,
+            content=body.content,
+            raw_event_id=body.raw_event_id,
+            source_hash=body.source_hash,
+            source_key=body.source_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{project_path:path}/rules")
+async def list_rules(
+    project_path: str,
+    limit: int = Query(5, ge=1, le=5),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return await memory_service.list_distilled_rules(
+        session, _path(project_path), limit=limit
     )
+
+
+@router.get("/{project_path:path}/rules/{entity_key}")
+async def get_rule(
+    project_path: str,
+    entity_key: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    result = await memory_service.get_distilled_rule(
+        session, _path(project_path), entity_key
+    )
+    if result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="rule not found")
+    return result
+
+
+@router.delete("/{project_path:path}/rules/{entity_key}")
+async def delete_rule(
+    project_path: str,
+    entity_key: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    result = await memory_service.delete_distilled_rule(
+        session, _path(project_path), entity_key
+    )
+    if result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="rule not found")
+    return result
 
 
 @router.post("/{project_path:path}/sources")
@@ -481,6 +532,7 @@ async def create_fact(
         return await fact_service.upsert_fact(
             session,
             _path(project_path),
+            fact_key=body.fact_key,
             kind=body.kind,
             title=body.title,
             content=body.content,
@@ -490,6 +542,26 @@ async def create_fact(
             source_key=body.source_key,
             raw_event_id=body.raw_event_id,
             source_hash=body.source_hash,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{project_path:path}/facts")
+async def list_facts_route(
+    project_path: str,
+    kind: str | None = Query(None),
+    order_by: str = Query("occurred_at"),
+    limit: int = Query(5, ge=1, le=5),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        return await fact_service.list_facts(
+            session,
+            _path(project_path),
+            kind=kind,
+            order_by=order_by,
+            limit=limit,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -517,6 +589,74 @@ async def search_facts_route(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{project_path:path}/facts/{fact_key}")
+async def get_fact_route(
+    project_path: str,
+    fact_key: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    result = await fact_service.get_fact(session, _path(project_path), fact_key)
+    if result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="fact not found")
+    return result
+
+
+@router.delete("/{project_path:path}/facts/{fact_key}")
+async def delete_fact_route(
+    project_path: str,
+    fact_key: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    result = await fact_service.delete_fact(session, _path(project_path), fact_key)
+    if result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="fact not found")
+    return result
+
+
+@router.post("/{project_path:path}/reindex/preview")
+async def preview_reindex_route(
+    project_path: str,
+    body: ReindexRequest | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        return await reindex_service.preview_external_reindex(
+            session,
+            _path(project_path),
+            source_keys=body.source_keys if body else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{project_path:path}/reindex/apply")
+async def apply_reindex_route(
+    project_path: str,
+    body: ReindexRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        return await reindex_service.apply_external_reindex_reset(
+            session,
+            _path(project_path),
+            source_keys=body.source_keys,
+            confirm=body.confirm,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{project_path:path}/legacy")
+async def inventory_legacy_route(
+    project_path: str,
+    limit: int = Query(5, ge=1, le=5),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return await reindex_service.inventory_legacy_state(
+        session, _path(project_path), limit=limit
+    )
 
 
 @router.post("/{project_path:path}/tasks")

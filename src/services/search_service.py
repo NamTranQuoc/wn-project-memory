@@ -20,6 +20,8 @@ def _row_to_dict(row: L3DistilledKnowledge, score: float | None = None) -> dict:
     payload = {
         "id": str(row.id),
         "project_path": row.project_path,
+        "project_id": str(row.project_id) if hasattr(row, "project_id") and row.project_id else None,
+        "source_id": str(row.source_id) if getattr(row, "source_id", None) else None,
         "entity_key": row.entity_key,
         "content": sanitize_and_truncate(row.content),
         "content_hash": row.content_hash,
