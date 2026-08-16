@@ -6,6 +6,7 @@ A Hierarchical, Agentic Memory Service designed to attach to Claude Code or Curs
 - **Project-scoped memory:** every row is tied to a `projects` registry (`project_id` + denormalized `project_path`) so multiple projects never mix.
 - **Layered knowledge store:** L0 working focus, L1 curated reference (incl. per-project policy), L2 rules/context, L3 distilled rules, L3-Ops typed ledgers, L4 raw event lake.
 - **Data sources registry:** declare where facts come from (GitHub PR, Teams, Jira, local files, live `user_session`) and how to re-read them.
+- **Incremental source-unit ledger:** durable per-unit dedup (`external_id` preferred, content hash fallback) so agents ingest only new/changed units without re-writing L4 duplicates.
 - **Hybrid Search:** pgvector + pg_trgm on L3 rules and L3-Ops facts/tasks/refs.
 - **Agent-driven writes:** the calling agent reads a raw event itself and writes structured L3/Ops rows directly (`upsert_fact`/`upsert_task`/`upsert_watched_ref`/`upsert_distilled_rule`) — no automatic LLM distillation pass.
 - **Context window protection:** sanitization, truncation (1500 chars), search/SQL hard limits.
@@ -32,6 +33,31 @@ flowchart TB
 
 ### Memory layers (read top → bottom for “what agent uses first”)
 
+```mermaid
+flowchart TB
+  Live["Live SSOT\nTeams / GitHub / Jira / files / session"]
+
+  subgraph project["One project — projects.project_path"]
+    direction TB
+    Reg["Registry\nprojects · sources\nconnection_config + read_recipe"]
+    L0["L0 Working memory\nl0_working_memory\nsession focus only — not policy"]
+    L1["L1 Curated references\nl1_references\nroster / protocol / is_policy=true"]
+    L2["L2 Meta memory\nl2_meta_memory\nproject environment / structure"]
+    L3["L3 Distilled knowledge\nl3_distilled_knowledge\natomic rules + hybrid search"]
+    Ops["L3-Ops typed ledgers\nfacts · tasks · watermarks\nsource_units · watched_refs"]
+    L4["L4 Raw event lake\nl4_raw_events\nmonthly partitions · drop after 6 months"]
+
+    Reg --> L0 --> L1 --> L2 --> L3 --> Ops --> L4
+  end
+
+  Live -->|"agent fetches, then register / ingest"| Reg
+  L4 -->|"agent writes structured rows"| L3
+  L4 -->|"agent writes structured rows"| Ops
+  Ops -.->|"source_id / raw_event_id / hashes"| L4
+```
+
+Live sources stay outside the database. The agent fetches them, registers `sources`, then writes down the stack: L4 raw payloads first, then structured L3 / L3-Ops rows that point back with `source_id` / `raw_event_id`. L0 is session scratch only. L4 partitions older than 6 months are dropped; `l3_source_units` keeps ingest identity so the agent does not re-write known units.
+
 | Layer | Table(s) | Role | Typical ops |
 | --- | --- | --- | --- |
 | **Registry** | `projects`, `sources` | Identity + provenance. `sources` stores connection config + `read_recipe` to re-fetch live data. | `init_project_memory`, `register_data_source`, `list_data_sources` |
@@ -39,7 +65,7 @@ flowchart TB
 | **L1** | `l1_references` | Curated reference docs, one row per named `ref_key` per project: rosters, seat commitments/DoD, source read-recipe guides, and **project-specific policy/workflow** (`is_policy=true` rows). | `upsert_l1_reference`, `get_l1_reference`, `list_l1_references`, `search_l1_references`, `get_active_policies` |
 | **L2** | `l2_meta_memory` | Project rules, conventions, structure (stable *data* context) | set at `init_project_memory` |
 | **L3** | `l3_distilled_knowledge` | Atomic distilled rules (semantic + keyword search) | `search_memory`, `upsert_distilled_rule` |
-| **L3-Ops** | `l3_watermarks`, `l3_facts`, `l3_tasks`, `l3_watched_refs` | Typed operational ledgers (cursors, decisions/plans, open-loops, watched refs) | watermark / fact / task / watched-ref tools |
+| **L3-Ops** | `l3_watermarks`, `l3_source_units`, `l3_facts`, `l3_tasks`, `l3_watched_refs` | Typed operational ledgers (cursors, durable source-unit dedup, decisions/plans, open-loops, watched refs) | watermark / source-unit / fact / task / watched-ref tools |
 | **L4** | `l4_raw_events` (partitioned) | Append-only raw payloads; 6-month retention | `log_raw_event`, `get_raw_context`, `query_deep_memory_sql` |
 | **Policy / workflow** | **L1** (`is_policy=true` rows), loaded every session via `get_active_policies` | Project-specific write-gates, phase rules, escalation contacts — one generic consumer skill loads whichever project's policy applies by switching `project_path`. The consumer skill still enforces the universal safety floor (write-class confirmation, no destructive action without approval) that stored policy can never relax. | `get_active_policies`, `upsert_l1_reference(..., is_policy=true)` |
 
@@ -87,7 +113,8 @@ flowchart LR
 
 | Table | Mirrors (e.g. war-room skill) | Notes |
 | --- | --- | --- |
-| `l3_watermarks` | incremental cursors | Structured JSON cursors; **no** embedding; ordered by `checked_at` |
+| `l3_watermarks` | incremental cursors | Structured JSON cursors; **no** embedding; ordered by `checked_at`. Advance only after successful ingest. |
+| `l3_source_units` | durable ingest ledger | Per-unit identity (`external_id` → `item_key`, else content-hash key); stores `content_hash` + native `source_hash`; survives L4 retention |
 | `l3_facts` | journal / decisions | Single table + `kind`: `fact` \| `decision` \| `plan` \| `question` \| `issue` \| `solution`; order by date or priority; hybrid search |
 | `l3_tasks` | open-loops | Stable `task_key` (e.g. `O-28`); `open` / `partial` / `closed` |
 | `l3_watched_refs` | watched refs | PR / issue / SHA / path / ticket / tag; disposition `mine` \| `queued` \| `resolved`; `why` (tracking reason) and `status_note` (latest state) update independently |
@@ -99,46 +126,52 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant A as Agent
+  participant U as User
   participant S as Service
   participant DB as Postgres
-  A->>S: init_project_memory(path, context, sources?)
-  S->>DB: upsert projects row
-  S->>DB: upsert L0 + L2
-  S->>DB: seed sources.user_session
-  S->>DB: register optional sources
-  S-->>A: project_id + status
+  A->>S: list_data_sources / get_active_policies
+  alt first session
+    A->>U: ask context, sources, policy rules
+    A->>S: init_project_memory(path, context, sources?)
+    S->>DB: upsert projects + L0/L2 + sources
+  else already initialized
+    A->>S: get_active_policies
+  end
+  S-->>A: project_id + status / policies
 ```
 
 **2. Ingest → agent reads → agent writes structured rows**
 
 ```mermaid
 flowchart LR
-  Log["log_raw_event\n(+ source_key)"] --> L4["L4 raw_events\n(audit trail)"]
-  Agent["Calling agent reads\nraw_content itself"] --> L4
-  Agent -->|"rule/fact"| L3["l3_distilled_knowledge /\nl3_facts"]
-  Agent -->|"task"| Tasks["l3_tasks"]
-  Agent -->|"watched_ref"| Refs["l3_watched_refs"]
+  Live["Agent fetches live\nTeams/Git/gh"] --> Check["check_source_units"]
+  Check -->|"unknown/changed"| Ingest["ingest_source_unit"]
+  Check -->|unchanged| Stop["stop at known boundary"]
+  Ingest --> Ledger["l3_source_units"]
+  Ingest -->|"created/changed"| L4["L4 raw_events"]
+  Ingest -->|unchanged| Ledger
+  L4 --> AgentWrite["Agent upserts\nfact/task/ref/rule"]
+  AgentWrite --> WM["upsert_watermark"]
 ```
 
-There is no background or automatic LLM distillation step — `log_raw_event` only appends to L4 for
-provenance/audit. The agent that read the source material is the one that decides what's atomic and
-writes it directly, citing `raw_event_id` for provenance.
+There is no background or automatic LLM distillation step. Prefer `ingest_source_unit` for crawled sources (idempotent ledger). Use `log_raw_event` for `user_session` / ad-hoc audit only. The agent that read the source decides what is atomic and writes it directly, citing `raw_event_id`.
 
 **3. Day-to-day agent loop**
 
-1. `search_memory` / `search_facts` / `list_tasks` — cheap context before big changes  
-2. Work against live tools (gh, Teams, …) using each source’s `read_recipe`  
-3. `upsert_watermark` after incremental reads  
-4. `log_raw_event` or typed `upsert_fact` / `upsert_task` / `upsert_watched_ref` when something must stick  
-5. `update_working_memory` for the current session focus  
-6. If a search hit is truncated → `get_raw_context(raw_event_id)`
+1. `search_memory` / `search_facts` / `list_tasks` / L1 search — cheap context **before** live API calls  
+2. Only if memory is insufficient or user demands freshness: work against live tools using each source’s `read_recipe`  
+3. `check_source_units` → `ingest_source_unit` for new/changed units → structured upserts with provenance  
+4. `upsert_watermark` after successful incremental reads (never after 429/failure)  
+5. When the user mentions a new source → `register_data_source` + initial ingest for that source only  
+6. `update_working_memory` for the current session focus  
+7. If a search hit is truncated → `get_raw_context(raw_event_id)`
 
 **4. First-time full ingest & full reindex** (agent-driven; service does not call gh/Teams itself)
 
 Defined in the agentic-memory skill § *Full ingest & reindex*:
 
-- **Full ingest:** after init, for each active source except `user_session` → execute `read_recipe` → `log_raw_event` / Ops upserts → `upsert_watermark` (honest `indexed_through` vs `full_read_ids`) → coverage footer.
-- **Incremental:** if a watermark exists, fetch only after the cursor.
+- **Full ingest:** after init, for each active source except `user_session` → execute `read_recipe` → `ingest_source_unit` + Ops upserts → `upsert_watermark` (honest `indexed_through` vs `full_read_ids`) → coverage footer.
+- **Incremental (default):** watermark + source-unit ledger → newest-first page → stop at known unchanged boundary; Git compares native hashes before reading bodies.
 - **Full reindex:** cold-start re-read (ignore old cursor as lower bound), re-run ingest, overwrite watermarks, soft-close contradicted tasks; say it was a reindex in the coverage footer.
 
 ### Tool surface (MCP ↔ REST)
@@ -147,6 +180,7 @@ Defined in the agentic-memory skill § *Full ingest & reindex*:
 | --- | --- | --- |
 | Bootstrap / focus | `init_project_memory`, `update_working_memory` | `POST …/init`, `PATCH …/working-memory` |
 | Sources | `register_data_source`, `list_data_sources` | `POST …/sources`, `GET …/sources` |
+| Source units (incremental) | `ingest_source_unit`, `check_source_units`, `get_source_unit` | `POST …/source-units/ingest`, `POST …/source-units/check`, `GET …/source-units` |
 | Raw events | `log_raw_event`, `get_raw_context`, `query_deep_memory_sql` | `POST …/events`, `GET …/raw-events/{id}`, `POST …/sql` |
 | L1 references / policy | `upsert_l1_reference`, `get_l1_reference`, `list_l1_references`, `search_l1_references`, `get_active_policies` | `POST/GET …/l1-references`, `GET …/l1-references/{ref_key}`, `GET …/l1-references/search`, `GET …/l1-references/policies` |
 | L3 rules | `search_memory`, `upsert_distilled_rule` | `GET …/search`, `POST …/rules` |
@@ -247,7 +281,12 @@ Do all of the following for me (edit files yourself; ask me only if a path is mi
    - `.env` in the memory repo has embedding configured (`EMBEDDING_DIRECT` / `EMBEDDING_API_BASE` or LiteLLM + models)
    - I can run `make mcp` manually to smoke-test, but prefer editor-managed stdio via the MCP config you write
 
-4) After wiring, follow the agentic-memory skill: on first use call `init_project_memory` with this project's absolute path, then `get_active_policies` (treat any result as binding for the session), then use `search_memory` / `log_raw_event` / `update_working_memory` as appropriate.
+4) After wiring, follow the agentic-memory skill:
+   - First session: ask me briefly for project context, context sources (Teams/GitHub/Jira/…), the local plan/doc folder (default `~/Desktop/memory/{repo-name}/{plan,doc}/`, or the path I name), and any policy rules I want stored; register that folder as `local_plans`; then call `init_project_memory` with this project's absolute path and optional sources, then `get_active_policies` (treat any result as binding).
+   - Every session: memory-first — `search_memory` / `search_facts` / L1 search before live Teams/Git greps.
+   - When I mention a new source, `register_data_source` and initial-ingest that source only.
+   - External crawl: `check_source_units` → `ingest_source_unit` → structured upserts with `raw_event_id`/`source_hash` → `upsert_watermark` only after success.
+   - Use `log_raw_event` for live `user_session` decisions; use `update_working_memory` for scratchpad only.
 ```
 
 #### Prompt 2 — Remote / server via REST (no local MCP stdio)
@@ -271,15 +310,18 @@ Do all of the following for me:
    Base path patterns (URL-encode project_path when it contains slashes):
    - POST   `{BASE}/projects/{project_path}/init`                 body: {"initial_context":"...","sources":[...]}
    - POST   `{BASE}/projects/{project_path}/events`               body: {"event_type":"...","content":"...","source_key":null}
+   - POST   `{BASE}/projects/{project_path}/source-units/ingest`  body: {"source_key":"...","content":"...","external_id":null,"source_hash":null,"stream_key":"messages"}
+   - POST   `{BASE}/projects/{project_path}/source-units/check`   body: {"source_key":"...","candidates":[...],"limit":5}
+   - GET    `{BASE}/projects/{project_path}/source-units?source_key=...&external_id=...`
    - GET    `{BASE}/projects/{project_path}/search?query=...&search_type=hybrid&limit=5`
    - POST   `{BASE}/projects/{project_path}/sql`                  body: {"sql_query":"SELECT ..."}
    - GET    `{BASE}/projects/{project_path}/raw-events/{id}`
    - PATCH  `{BASE}/projects/{project_path}/working-memory`       body: {"current_focus_text":"..."}
    - POST/GET `{BASE}/projects/{project_path}/sources`
    - PUT/GET  `{BASE}/projects/{project_path}/watermarks`
-   - POST/GET `{BASE}/projects/{project_path}/facts` (+ `…/facts/search`)
+   - POST/GET `{BASE}/projects/{project_path}/facts` (+ `…/facts/search`)  body may include `raw_event_id`, `source_hash`
    - POST/GET `{BASE}/projects/{project_path}/tasks` (+ `…/tasks/{key}/close`)
-   - POST/GET `{BASE}/projects/{project_path}/watched-refs`        body accepts optional `status_note`
+   - POST/GET `{BASE}/projects/{project_path}/watched-refs`        body accepts optional `status_note`, `raw_event_id`, `source_hash`
    - POST/GET `{BASE}/projects/{project_path}/l1-references` (+ `…/l1-references/{ref_key}`, `…/l1-references/search`, `…/l1-references/policies`)
    - GET    `{BASE}/health` and `{BASE}/ready`
 
@@ -289,8 +331,9 @@ Do all of the following for me:
    - that tool names in the skill map 1:1 to these REST endpoints
    - always pass this repo's absolute path as `project_path`
    - respect limits (search limit≤5, SQL auto LIMIT 10, truncated text → get raw event)
+   - memory-first + incremental source-unit ingest (do not re-grep Teams when memory can answer)
 
-4) Do NOT configure MCP stdio for this mode. Operate only via REST + the skill rules (init → get_active_policies → search before big changes → log_raw_event on feedback → update_working_memory for scratchpad).
+4) Do NOT configure MCP stdio for this mode. Operate only via REST + the skill rules (ask setup questions on first init including the local plan/doc folder / `local_plans` → get_active_policies → memory search before live APIs → ingest_source_unit for crawls → register newly mentioned sources → update_working_memory for scratchpad).
 
 5) Smoke-check with GET `{BASE}/health`. If it fails, tell me the service is down; do not invent a working connection.
 ```

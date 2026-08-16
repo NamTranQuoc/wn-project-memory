@@ -15,6 +15,7 @@ from src.services import (
     memory_service,
     search_service,
     source_service,
+    source_unit_service,
     sql_service,
     task_service,
     watched_ref_service,
@@ -78,6 +79,7 @@ class WatermarkRequest(BaseModel):
     full_read_ids: list[Any] | None = None
     known_gaps: list[Any] | None = None
     checked_at: datetime | None = None
+    raw_event_id: str | None = None
 
 
 class FactRequest(BaseModel):
@@ -88,6 +90,8 @@ class FactRequest(BaseModel):
     status: str | None = None
     occurred_at: datetime | None = None
     source_key: str | None = None
+    raw_event_id: str | None = None
+    source_hash: str | None = None
 
 
 class TaskRequest(BaseModel):
@@ -98,6 +102,8 @@ class TaskRequest(BaseModel):
     priority: int = 0
     waiting_on: str | None = None
     source_key: str | None = None
+    raw_event_id: str | None = None
+    source_hash: str | None = None
 
 
 class CloseTaskRequest(BaseModel):
@@ -111,6 +117,25 @@ class WatchedRefRequest(BaseModel):
     status_note: str | None = None
     disposition: str = "queued"
     source_key: str | None = None
+    raw_event_id: str | None = None
+    source_hash: str | None = None
+
+
+class IngestSourceUnitRequest(BaseModel):
+    source_key: str
+    content: str = Field(..., min_length=1)
+    stream_key: str | None = None
+    external_id: str | None = None
+    source_hash: str | None = None
+    event_type: str = "source_unit"
+    unit_metadata: dict[str, Any] | None = None
+
+
+class CheckSourceUnitsRequest(BaseModel):
+    source_key: str
+    candidates: list[dict[str, Any]]
+    stream_key: str | None = None
+    limit: int = Field(5, ge=1, le=5)
 
 
 class L1ReferenceRequest(BaseModel):
@@ -348,6 +373,7 @@ async def upsert_watermark(
             full_read_ids=body.full_read_ids,
             known_gaps=body.known_gaps,
             checked_at=body.checked_at,
+            raw_event_id=body.raw_event_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -379,6 +405,72 @@ async def get_watermark(
     return result
 
 
+@router.post("/{project_path:path}/source-units/ingest")
+async def ingest_source_unit_route(
+    project_path: str,
+    body: IngestSourceUnitRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        return await source_unit_service.ingest_source_unit(
+            session,
+            _path(project_path),
+            source_key=body.source_key,
+            content=body.content,
+            stream_key=body.stream_key,
+            external_id=body.external_id,
+            source_hash=body.source_hash,
+            event_type=body.event_type,
+            unit_metadata=body.unit_metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{project_path:path}/source-units/check")
+async def check_source_units_route(
+    project_path: str,
+    body: CheckSourceUnitsRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        return await source_unit_service.check_source_units(
+            session,
+            _path(project_path),
+            source_key=body.source_key,
+            candidates=body.candidates,
+            stream_key=body.stream_key,
+            limit=body.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{project_path:path}/source-units")
+async def get_source_unit_route(
+    project_path: str,
+    source_key: str = Query(...),
+    item_key: str | None = Query(None),
+    external_id: str | None = Query(None),
+    stream_key: str = Query(""),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        result = await source_unit_service.get_source_unit(
+            session,
+            _path(project_path),
+            source_key=source_key,
+            item_key=item_key,
+            external_id=external_id,
+            stream_key=stream_key or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="source unit not found")
+    return result
+
+
 @router.post("/{project_path:path}/facts")
 async def create_fact(
     project_path: str,
@@ -396,6 +488,8 @@ async def create_fact(
             status=body.status,
             occurred_at=body.occurred_at,
             source_key=body.source_key,
+            raw_event_id=body.raw_event_id,
+            source_hash=body.source_hash,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -442,6 +536,8 @@ async def create_task(
             priority=body.priority,
             waiting_on=body.waiting_on,
             source_key=body.source_key,
+            raw_event_id=body.raw_event_id,
+            source_hash=body.source_hash,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -501,6 +597,8 @@ async def create_watched_ref(
             status_note=body.status_note,
             disposition=body.disposition,
             source_key=body.source_key,
+            raw_event_id=body.raw_event_id,
+            source_hash=body.source_hash,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -335,6 +335,243 @@ async def test_l1_reference_service_and_watched_ref_status_note(
 
 
 @pytest.mark.asyncio
+async def test_source_unit_idempotent_ingest_and_checks(session: AsyncSession) -> None:
+    from sqlalchemy import func, select
+
+    from src.models import L4RawEvent
+    from src.services import fact_service, source_service, source_unit_service, watermark_service
+
+    project = f"/tmp/source-unit-{uuid.uuid4()}"
+    await memory_service.init_project_memory(
+        session,
+        project,
+        "Source unit smoke",
+        sources=[
+            {
+                "source_key": "teams_war_room",
+                "source_type": "teams_chat",
+                "display_name": "War room",
+                "connection_config": {"chat_id": "19:abc@thread.v2"},
+                "read_recipe": "ms365 get-chat messages newest-first",
+            },
+            {
+                "source_key": "repo_main",
+                "source_type": "github_repo",
+                "connection_config": {"repo": "org/app"},
+                "read_recipe": "git rev-parse HEAD; git show <blob>",
+            },
+        ],
+    )
+
+    first = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        external_id="msg-100",
+        content="Ship freeze stays until Friday",
+    )
+    assert first["action"] == "created"
+    assert first["raw_event_id"]
+    first_event_id = first["raw_event_id"]
+
+    again = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        external_id="msg-100",
+        content="Ship freeze stays until Friday",
+    )
+    assert again["action"] == "unchanged"
+    assert again["raw_event_id"] == first_event_id
+
+    count_result = await session.execute(
+        select(func.count())
+        .select_from(L4RawEvent)
+        .where(L4RawEvent.project_path == project)
+    )
+    assert int(count_result.scalar_one()) == 1
+
+    edited = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        external_id="msg-100",
+        content="Ship freeze stays until Monday",
+    )
+    assert edited["action"] == "changed"
+    assert edited["raw_event_id"] != first_event_id
+
+    count_result = await session.execute(
+        select(func.count())
+        .select_from(L4RawEvent)
+        .where(L4RawEvent.project_path == project)
+    )
+    assert int(count_result.scalar_one()) == 2
+
+    twin = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        external_id="msg-101",
+        content="Ship freeze stays until Monday",
+    )
+    assert twin["action"] == "created"
+    assert twin["item_key"] != edited["item_key"]
+
+    checked = await source_unit_service.check_source_units(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        candidates=[
+            {"external_id": "msg-999", "content": "brand new"},
+            {
+                "external_id": "msg-100",
+                "content": "Ship freeze stays until Monday",
+            },
+            {
+                "external_id": "msg-100",
+                "content": "Ship freeze stays until Tuesday",
+            },
+        ],
+    )
+    assert checked["count"] == 3
+    assert checked["results"][0]["status"] == "unknown"
+    assert checked["results"][1]["status"] == "unchanged"
+    assert checked["results"][2]["status"] == "changed"
+
+    over_limit = await source_unit_service.check_source_units(
+        session,
+        project,
+        source_key="teams_war_room",
+        candidates=[{"external_id": f"x-{i}", "content": f"c-{i}"} for i in range(10)],
+        limit=100,
+    )
+    assert over_limit["count"] == 5
+    assert over_limit["limit_applied"] == 5
+
+    git_hash = "a" * 40
+    git_first = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="repo_main",
+        stream_key="files",
+        external_id="path:README.md",
+        content="# App\n",
+        source_hash=git_hash,
+    )
+    assert git_first["action"] == "created"
+    git_same = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="repo_main",
+        stream_key="files",
+        external_id="path:README.md",
+        content="# App\n",
+        source_hash=git_hash,
+    )
+    assert git_same["action"] == "unchanged"
+    git_changed = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="repo_main",
+        stream_key="files",
+        external_id="path:README.md",
+        content="# App\n\nUpdated\n",
+        source_hash="b" * 40,
+    )
+    assert git_changed["action"] == "changed"
+
+    # Newest-first page hits known boundary → watermark may advance to newest processed tip.
+    newest_id = "msg-200"
+    newest = await source_unit_service.ingest_source_unit(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        external_id=newest_id,
+        content="Latest status ping",
+    )
+    assert newest["action"] == "created"
+
+    page_check = await source_unit_service.check_source_units(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        candidates=[
+            {"external_id": newest_id, "content": "Latest status ping"},
+            {
+                "external_id": "msg-100",
+                "content": "Ship freeze stays until Monday",
+            },
+        ],
+    )
+    assert page_check["results"][0]["status"] == "unchanged"
+    assert page_check["results"][1]["status"] == "unchanged"
+
+    wm = await watermark_service.upsert_watermark(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        indexed_through={"message_id": newest_id, "created_at": "2026-08-15T00:00:00Z"},
+        full_read_ids=[newest_id, "msg-100"],
+        known_gaps=[],
+        raw_event_id=newest["raw_event_id"],
+    )
+    assert wm["action"] == "created"
+    assert wm["indexed_through"]["message_id"] == newest_id
+
+    # Failed/429 style: leave watermark alone and record gap — do not invent "now".
+    gap_wm = await watermark_service.upsert_watermark(
+        session,
+        project,
+        source_key="teams_war_room",
+        stream_key="messages",
+        indexed_through={"message_id": newest_id, "created_at": "2026-08-15T00:00:00Z"},
+        full_read_ids=[newest_id, "msg-100"],
+        known_gaps=[{"reason": "teams_429", "at": "2026-08-15T01:00:00Z"}],
+    )
+    assert gap_wm["action"] == "updated"
+    assert gap_wm["indexed_through"]["message_id"] == newest_id
+    assert gap_wm["known_gaps"][0]["reason"] == "teams_429"
+
+    fake_embedding = [0.04] * 1024
+    with patch(
+        "src.services.fact_service.embed_text",
+        new_callable=AsyncMock,
+        return_value=fake_embedding,
+    ):
+        fact = await fact_service.upsert_fact(
+            session,
+            project,
+            kind="decision",
+            title="Freeze window",
+            content="Ship freeze stays until Monday",
+            source_key="teams_war_room",
+            raw_event_id=edited["raw_event_id"],
+            source_hash=edited["source_hash"],
+        )
+        assert fact["action"] == "created"
+        assert fact["raw_event_id"] == edited["raw_event_id"]
+        assert fact["source_hash"] == edited["source_hash"]
+
+    sources = await source_service.list_data_sources(session, project)
+    assert {s["source_key"] for s in sources["sources"]} >= {
+        "user_session",
+        "teams_war_room",
+        "repo_main",
+    }
+
+    await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_query_deep_memory_sql_fallback_when_project_path_not_selected(
     session: AsyncSession,
 ) -> None:

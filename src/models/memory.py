@@ -325,6 +325,76 @@ class L4RawEvent(Base):
     )
 
 
+class L3SourceUnit(Base):
+    """Durable per-unit ledger for incremental source ingest (survives L4 retention)."""
+
+    __tablename__ = "l3_source_units"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
+    )
+    project_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
+    )
+    stream_key: Mapped[str] = mapped_column(
+        String(256), nullable=False, server_default=text("''"), default=""
+    )
+    item_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # No FK to partitioned l4_raw_events (Postgres limitation); indexed UUID only.
+    last_raw_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    unit_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "source_id",
+            "stream_key",
+            "item_key",
+            name="uq_l3_source_units_project_source_stream_item",
+        ),
+        Index("ix_l3_source_units_project_id", "project_id"),
+        Index("ix_l3_source_units_project_path", "project_path"),
+        Index("ix_l3_source_units_source_id", "source_id"),
+        Index(
+            "ix_l3_source_units_source_stream",
+            "project_id",
+            "source_id",
+            "stream_key",
+        ),
+        Index("ix_l3_source_units_item_key", "item_key"),
+        Index("ix_l3_source_units_external_id", "external_id"),
+        Index("ix_l3_source_units_content_hash", "content_hash"),
+        Index("ix_l3_source_units_source_hash", "source_hash"),
+        Index("ix_l3_source_units_last_raw_event_id", "last_raw_event_id"),
+    )
+
+
 class L3Watermark(Base):
     __tablename__ = "l3_watermarks"
 

@@ -121,6 +121,12 @@ async def upsert_watermark(
         return out
 
     # Cursor upsert always refreshes fields — watermarks are state, not append-only.
+    # Contract: callers must only advance indexed_through after the corresponding
+    # source units were successfully ingested (and structured writes done). Never set
+    # the cursor to "now" after a skipped/failed/429 fetch. Recommended shapes:
+    #   git:    {"commit": "<sha>", "path"?: "..."} or {"tree": "<sha>"} / {"blob": "<sha>"}
+    #   teams:  {"message_id": "...", "created_at": "<iso8601>"}
+    #   github: {"updated_at": "<iso8601>", "id": <int>}
     existing.indexed_through = indexed_through
     existing.full_read_ids = full_read_ids
     existing.known_gaps = known_gaps

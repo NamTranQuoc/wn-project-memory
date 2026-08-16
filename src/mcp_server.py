@@ -15,6 +15,7 @@ from src.services import (
     memory_service,
     search_service,
     source_service,
+    source_unit_service,
     sql_service,
     task_service,
     watched_ref_service,
@@ -119,9 +120,13 @@ async def log_raw_event(
     source_hash: str = "",
     source_key: str = "",
 ) -> str:
-    """Append a raw event to L4 for provenance/audit. Does not extract facts —
-    read the raw content yourself and call upsert_fact/upsert_task/
-    upsert_watched_ref/upsert_distilled_rule directly with raw_event_id set.
+    """Append a raw event to L4 for provenance/audit (user_session / ad-hoc).
+
+    For crawled external sources (Teams, Git, GitHub, Jira), prefer
+    ingest_source_unit so the durable ledger dedups and detects changes.
+    Does not extract facts — read the raw content yourself and call
+    upsert_fact/upsert_task/upsert_watched_ref/upsert_distilled_rule with
+    raw_event_id set.
 
     source_key: optional registered source; falls back to user_session.
     """
@@ -207,6 +212,113 @@ async def list_data_sources(project_path: str, active_only: bool = True) -> str:
 
 
 @mcp.tool()
+async def ingest_source_unit(
+    project_path: str,
+    source_key: str,
+    content: str,
+    stream_key: str = "",
+    external_id: str = "",
+    source_hash: str = "",
+    event_type: str = "source_unit",
+    unit_metadata_json: str = "{}",
+) -> str:
+    """Idempotent ingest of one source content unit into the durable ledger + L4.
+
+    Prefer external_id (Teams message id, comment id, …) when available; otherwise
+    content is hashed. Native source_hash (e.g. git commit/blob SHA) is stored for
+    change detection. Returns action=created|changed|unchanged. Only created/changed
+    append a new L4 raw event — use that raw_event_id for subsequent upserts.
+    """
+    try:
+        unit_metadata = json.loads(unit_metadata_json) if unit_metadata_json else {}
+        if unit_metadata is not None and not isinstance(unit_metadata, dict):
+            return _dump({"error": "unit_metadata_json must be a JSON object"})
+    except json.JSONDecodeError as exc:
+        return _dump({"error": f"invalid unit_metadata_json: {exc}"})
+
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await source_unit_service.ingest_source_unit(
+                session,
+                project_path,
+                source_key=source_key,
+                content=content,
+                stream_key=stream_key or None,
+                external_id=external_id or None,
+                source_hash=source_hash or None,
+                event_type=event_type or "source_unit",
+                unit_metadata=unit_metadata or None,
+            )
+            await session.commit()
+            return _dump(result)
+        except ValueError as exc:
+            return _dump({"error": str(exc)})
+
+
+@mcp.tool()
+async def check_source_units(
+    project_path: str,
+    source_key: str,
+    candidates_json: str,
+    stream_key: str = "",
+    limit: int = 5,
+) -> str:
+    """Batch-check candidates against the source-unit ledger (max 5).
+
+    candidates_json: JSON array of
+      {external_id?, content?, content_hash?, source_hash?, stream_key?, index?}
+    status per item: unknown | unchanged | changed | known | error.
+    Use newest-first pages: ingest unknown/changed; stop when hitting unchanged.
+    """
+    try:
+        candidates = json.loads(candidates_json) if candidates_json else []
+        if not isinstance(candidates, list):
+            return _dump({"error": "candidates_json must be a JSON array"})
+    except json.JSONDecodeError as exc:
+        return _dump({"error": f"invalid candidates_json: {exc}"})
+
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await source_unit_service.check_source_units(
+                session,
+                project_path,
+                source_key=source_key,
+                candidates=candidates,
+                stream_key=stream_key or None,
+                limit=limit,
+            )
+            await session.commit()
+            return _dump(result)
+        except ValueError as exc:
+            return _dump({"error": str(exc)})
+
+
+@mcp.tool()
+async def get_source_unit(
+    project_path: str,
+    source_key: str,
+    item_key: str = "",
+    external_id: str = "",
+    stream_key: str = "",
+) -> str:
+    """Lookup one durable source-unit ledger row by item_key or external_id."""
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await source_unit_service.get_source_unit(
+                session,
+                project_path,
+                source_key=source_key,
+                item_key=item_key or None,
+                external_id=external_id or None,
+                stream_key=stream_key or None,
+            )
+            await session.commit()
+            return _dump(result)
+        except ValueError as exc:
+            return _dump({"error": str(exc)})
+
+
+@mcp.tool()
 async def upsert_watermark(
     project_path: str,
     source_key: str,
@@ -215,8 +327,13 @@ async def upsert_watermark(
     full_read_ids_json: str = "[]",
     known_gaps_json: str = "[]",
     checked_at: str = "",
+    raw_event_id: str = "",
 ) -> str:
-    """Upsert a cursor/watermark for a registered source stream."""
+    """Upsert a cursor/watermark for a registered source stream.
+
+    Advance only after units for this cursor were actually ingested. Never set
+    indexed_through to 'now' after a failed/429 fetch — record known_gaps instead.
+    """
     try:
         indexed_through = json.loads(indexed_through_json or "{}")
         full_read_ids = json.loads(full_read_ids_json or "[]")
@@ -235,6 +352,7 @@ async def upsert_watermark(
                 full_read_ids=full_read_ids,
                 known_gaps=known_gaps,
                 checked_at=checked_at or None,
+                raw_event_id=raw_event_id or None,
             )
             await session.commit()
             return _dump(result)
@@ -272,6 +390,8 @@ async def upsert_fact(
     status: str = "",
     occurred_at: str = "",
     source_key: str = "",
+    raw_event_id: str = "",
+    source_hash: str = "",
 ) -> str:
     """Upsert an operational fact (kind: fact/decision/plan/question/issue/solution)."""
     async with AsyncSessionLocal() as session:
@@ -286,6 +406,8 @@ async def upsert_fact(
                 status=status or None,
                 occurred_at=occurred_at or None,
                 source_key=source_key or None,
+                raw_event_id=raw_event_id or None,
+                source_hash=source_hash or None,
             )
             await session.commit()
             return _dump(result)
@@ -330,6 +452,8 @@ async def upsert_task(
     priority: int = 0,
     waiting_on: str = "",
     source_key: str = "",
+    raw_event_id: str = "",
+    source_hash: str = "",
 ) -> str:
     """Upsert an operational task / open-loop (stable task_key)."""
     async with AsyncSessionLocal() as session:
@@ -344,6 +468,8 @@ async def upsert_task(
                 priority=priority,
                 waiting_on=waiting_on or None,
                 source_key=source_key or None,
+                raw_event_id=raw_event_id or None,
+                source_hash=source_hash or None,
             )
             await session.commit()
             return _dump(result)
@@ -394,6 +520,8 @@ async def upsert_watched_ref(
     status_note: str = "",
     disposition: str = "queued",
     source_key: str = "",
+    raw_event_id: str = "",
+    source_hash: str = "",
 ) -> str:
     """Upsert a watched reference (PR/issue/SHA/path/ticket/tag)."""
     async with AsyncSessionLocal() as session:
@@ -407,6 +535,8 @@ async def upsert_watched_ref(
                 status_note=status_note or None,
                 disposition=disposition,
                 source_key=source_key or None,
+                raw_event_id=raw_event_id or None,
+                source_hash=source_hash or None,
             )
             await session.commit()
             return _dump(result)

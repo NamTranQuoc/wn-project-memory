@@ -2,7 +2,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.services.hashing import compute_content_hash, compute_source_hash
+from src.services.hashing import (
+    build_item_key,
+    canonicalize_content,
+    compute_content_hash,
+    compute_source_hash,
+)
 from src.services.partition_service import (
     month_start,
     months_ago,
@@ -10,6 +15,7 @@ from src.services.partition_service import (
     partition_name_for,
 )
 from src.services.sanitize import TRUNCATE_SUFFIX, sanitize_and_truncate
+from src.services.source_unit_service import _clamp_limit
 from src.services.sql_service import ensure_limit, validate_select_only
 
 
@@ -39,6 +45,28 @@ class TestHashing:
         h = compute_source_hash("payload")
         assert len(h) == 64
         assert all(c in "0123456789abcdef" for c in h)
+
+    def test_canonicalize_normalizes_newlines_and_trailing_space(self) -> None:
+        raw = "hello  \r\nworld\r\n"
+        assert canonicalize_content(raw) == "hello\nworld"
+
+    def test_item_key_prefers_external_id(self) -> None:
+        assert build_item_key(external_id=" msg-1 ", content_hash="abc") == "ext:msg-1"
+
+    def test_item_key_falls_back_to_content_hash(self) -> None:
+        assert build_item_key(external_id=None, content_hash="deadbeef") == "hash:deadbeef"
+        assert build_item_key(external_id="  ", content_hash="deadbeef") == "hash:deadbeef"
+
+    def test_item_key_collapses_internal_whitespace(self) -> None:
+        assert build_item_key(external_id="a   b", content_hash="x") == "ext:a b"
+
+
+class TestSourceUnitClamp:
+    def test_clamp_default_and_cap(self) -> None:
+        assert _clamp_limit(None) == 5
+        assert _clamp_limit(100) == 5
+        assert _clamp_limit(0) == 1
+        assert _clamp_limit(3) == 3
 
 
 class TestSqlGuard:

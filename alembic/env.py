@@ -10,6 +10,7 @@ from src.models import (  # noqa: F401 — register models
     L1Reference,
     L2MetaMemory,
     L3DistilledKnowledge,
+    L3SourceUnit,
     L4RawEvent,
 )
 
@@ -19,7 +20,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url_sync)
+# ConfigParser treats % as interpolation — passwords with %xx must be escaped.
+config.set_main_option("sqlalchemy.url", settings.database_url_sync.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
