@@ -1,0 +1,44 @@
+# Local stack for plugin users. The release workflow replaces ${IMAGE} with the tagged
+# image pinned by digest and publishes this file as the release asset compose.yml.
+# POSTGRES_PASSWORD, MEMORY_DB_PASSWORD and MEMORY_API_KEY come from the .env file next to
+# it, and create-db-user.sh is copied next to it from the plugin (/agentic-memory:setup
+# does both). The service connects as agentic_memory_app, never as the Postgres superuser.
+name: agentic-memory
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      APP_DB_NAME: agentic_memory
+      APP_DB_USER: agentic_memory_app
+      APP_DB_PASSWORD: ${MEMORY_DB_PASSWORD:?set MEMORY_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./create-db-user.sh:/docker-entrypoint-initdb.d/10-create-db-user.sh:ro
+    healthcheck:
+      # TCP only opens once the init scripts are done.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d agentic_memory"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    image: ${IMAGE}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://agentic_memory_app:${MEMORY_DB_PASSWORD}@db:5432/agentic_memory
+      DATABASE_URL_SYNC: postgresql+psycopg://agentic_memory_app:${MEMORY_DB_PASSWORD}@db:5432/agentic_memory
+      MEMORY_API_KEY: ${MEMORY_API_KEY:?set MEMORY_API_KEY in .env}
+      SEMANTIC_SEARCH_ENABLED: ${SEMANTIC_SEARCH_ENABLED:-false}
+    ports:
+      # Loopback only: nothing outside this machine can reach the service.
+      - "127.0.0.1:${MEMORY_PORT:-8765}:8000"
+
+volumes:
+  pgdata: {}

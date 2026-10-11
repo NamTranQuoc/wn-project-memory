@@ -1,0 +1,31 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Raw Event Retention (L4)",
+    "output": "docs/diagrams/raw-lifecycle.html",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "main", "label": "Kept in L4" },
+    { "id": "terminal", "label": "Retention" }
+  ],
+  "states": [
+    { "id": "written", "type": "start", "label": "Written", "sublabel": "ingest or log", "lane": "main", "col": 0, "step": "01" },
+    { "id": "fresh", "type": "active", "label": "Fresh", "sublabel": "touched < 30 days", "lane": "main", "col": 1, "step": "02", "tag": "touch is a no-op" },
+    { "id": "idle", "type": "waiting", "label": "Idle", "sublabel": "30 days without touch", "lane": "main", "col": 2, "step": "03" },
+    { "id": "dropped", "type": "neutral", "label": "Dropped", "sublabel": "partition > 6 months", "lane": "terminal", "col": 2, "tag": "real link stays" }
+  ],
+  "transitions": [
+    { "from": "written", "to": "fresh", "label": "now" },
+    { "from": "fresh", "to": "idle", "label": "30 days" },
+    { "from": "idle", "to": "fresh", "label": "read or cite", "variant": "emphasis" },
+    { "from": "idle", "to": "dropped", "label": "6 months", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "What counts as a touch", "items": ["get_raw_context reads the full payload", "A new L3 revision cites the raw_event_id", "SQL scans and repeat ingests do not renew"] },
+    { "dot": "amber", "title": "How it works", "items": ["l4_raw_events is partitioned by last_touched_at", "A touch moves the row into this month's partition", "The daily job drops whole partitions past the idle window"] },
+    { "dot": "emerald", "title": "After the drop", "items": ["get_raw_context returns raw_dropped with source_urls", "The agent re-reads the real source with its read_recipe"] }
+  ]
+}

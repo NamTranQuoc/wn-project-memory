@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agentic Memory Architecture",
+    "output": "docs/diagrams/architecture.html",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "plugin", "type": "frontend", "label": "Plugin", "sublabel": "skill + /setup + MCP config", "pos": [40, 60], "size": [150, 64] },
+    { "id": "agent", "type": "external", "label": "Coding agent", "sublabel": "Claude Code", "pos": [40, 220], "size": [150, 64] },
+    { "id": "gate", "type": "security", "label": "API key gate", "sublabel": "all routes except /health", "pos": [370, 220], "size": [150, 64], "tag": "MEMORY_API_KEY" },
+    { "id": "mcp", "type": "backend", "label": "MCP tools", "sublabel": "streamable HTTP /mcp", "pos": [620, 220], "size": [150, 64] },
+    { "id": "rest", "type": "backend", "label": "REST routes", "sublabel": "/l1 /l2 /l3 /l4 /global", "pos": [620, 380], "size": [150, 64] },
+    { "id": "services", "type": "backend", "label": "Layer services", "sublabel": "L1 · L2 · L3 · L4 · global", "pos": [900, 220], "size": [160, 64] },
+    { "id": "embed", "type": "cloud", "label": "Embedding API", "sublabel": "Ollama or LiteLLM", "pos": [900, 60], "size": [160, 64], "tag": "optional" },
+    { "id": "db", "type": "database", "label": "PostgreSQL", "sublabel": "pgvector + pg_trgm", "pos": [1170, 220], "size": [150, 64] },
+    { "id": "scheduler", "type": "backend", "label": "Partition job", "sublabel": "daily create / drop", "pos": [1170, 380], "size": [150, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Service container (Docker image)", "wraps": ["gate", "mcp", "rest", "services", "scheduler"] }
+  ],
+  "connections": [
+    { "id": "plugin-guides-agent", "from": "plugin", "to": "agent", "label": "skill + config", "variant": "dashed" },
+    { "id": "agent-calls-gate", "from": "agent", "to": "gate", "label": "MCP over HTTP + X-API-Key", "variant": "emphasis" },
+    { "id": "gate-to-mcp", "from": "gate", "to": "mcp", "label": "valid key" },
+    { "id": "gate-to-rest", "from": "gate", "to": "rest", "label": "scripts", "variant": "dashed" },
+    { "id": "mcp-to-services", "from": "mcp", "to": "services", "label": "service calls", "variant": "emphasis" },
+    { "id": "rest-to-services", "from": "rest", "to": "services", "label": "same calls" },
+    { "id": "services-embed", "from": "services", "to": "embed", "label": "only if semantic on", "variant": "dashed" },
+    { "id": "services-db", "from": "services", "to": "db", "label": "SQL" },
+    { "id": "scheduler-db", "from": "scheduler", "to": "db", "label": "partitions" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Two ways to run", "items": ["Local: /agentic-memory:setup runs the release compose.yml (Postgres + image), bound to 127.0.0.1", "Remote: any https URL that serves the same image"] },
+    { "dot": "rose", "title": "Security", "items": ["The service refuses to start without a 32+ character API key", "REST and /mcp share one key check; only /health and /ready are public"] },
+    { "dot": "amber", "title": "Optional semantic search", "items": ["SEMANTIC_SEARCH_ENABLED=false: no embedding call, no semantic_search tool", "Keyword search (pg_trgm) always works"] }
+  ]
+}

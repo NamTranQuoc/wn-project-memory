@@ -1,0 +1,7 @@
+---
+description: Core implementation rules for the agentic-memory service (layers, privacy, API key, retention, limits).
+alwaysApply: true
+---
+
+Read and apply every rule in `.claude/CLAUDE.md` before changing code in this repository.
+Pay special attention to "Public repo" privacy, the mandatory API key, L4 retention and output limits.

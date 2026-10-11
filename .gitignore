@@ -1,0 +1,41 @@
+# Environment / secrets — real values live only in .env.local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials.json
+
+# Personal data that must never be published
+.privacy-denylist
+seed.json
+*.seed.json
+carry-over/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Testing / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.archify/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.claude/settings.local.json
+.cursor/mcp.json
+
+# Docker volumes
+pgdata/

@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Write One Fact: Create, Then Merge on Conflict",
+    "output": "docs/diagrams/read-write.html",
+    "locale": "en",
+    "viewBox": [
+      1080,
+      640
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "Agent",
+      "sublabel": "merges text"
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "MCP tools",
+      "sublabel": "/mcp + API key"
+    },
+    {
+      "id": "l2",
+      "type": "security",
+      "label": "Key rule",
+      "sublabel": "L2 namespaces"
+    },
+    {
+      "id": "l3",
+      "type": "database",
+      "label": "Facts",
+      "sublabel": "L3 + revisions"
+    },
+    {
+      "id": "l4",
+      "type": "messagebus",
+      "label": "Raw events",
+      "sublabel": "L4"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 290,
+      "label": "Create"
+    },
+    {
+      "from": 294,
+      "to": 460,
+      "label": "Merge"
+    },
+    {
+      "from": 464,
+      "to": 548,
+      "label": "New key"
+    }
+  ],
+  "messages": [
+    {
+      "id": "create",
+      "from": "agent",
+      "to": "mcp",
+      "y": 165,
+      "label": "write_fact(create, decision.api, parts)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "build",
+      "from": "mcp",
+      "to": "l2",
+      "y": 193,
+      "label": "build + validate key",
+      "variant": "security"
+    },
+    {
+      "id": "exists",
+      "from": "mcp",
+      "to": "l3",
+      "y": 221,
+      "label": "lock row: key exists, revision 2",
+      "variant": "default"
+    },
+    {
+      "id": "conflict",
+      "from": "mcp",
+      "to": "agent",
+      "y": 249,
+      "label": "revision_conflict + current value",
+      "variant": "return"
+    },
+    {
+      "id": "merge",
+      "from": "agent",
+      "to": "mcp",
+      "y": 307,
+      "label": "write_fact(merge, base_revision=2, sources)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "validate",
+      "from": "mcp",
+      "to": "l2",
+      "y": 335,
+      "label": "validate key",
+      "variant": "security"
+    },
+    {
+      "id": "lock",
+      "from": "mcp",
+      "to": "l3",
+      "y": 363,
+      "label": "lock row, base == 2",
+      "variant": "default"
+    },
+    {
+      "id": "insert",
+      "from": "mcp",
+      "to": "l3",
+      "y": 391,
+      "label": "revision 3 + source_url",
+      "variant": "emphasis"
+    },
+    {
+      "id": "touch",
+      "from": "mcp",
+      "to": "l4",
+      "y": 419,
+      "label": "touch cited raw event",
+      "variant": "dashed"
+    },
+    {
+      "id": "done",
+      "from": "mcp",
+      "to": "agent",
+      "y": 447,
+      "label": "merge · revision 3",
+      "variant": "return"
+    },
+    {
+      "id": "new",
+      "from": "agent",
+      "to": "mcp",
+      "y": 477,
+      "label": "write_fact(create, other parts)",
+      "variant": "default"
+    },
+    {
+      "id": "insert-new",
+      "from": "mcp",
+      "to": "l3",
+      "y": 505,
+      "label": "revision 1",
+      "variant": "emphasis"
+    },
+    {
+      "id": "created",
+      "from": "mcp",
+      "to": "agent",
+      "y": 533,
+      "label": "create · revision 1",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "mcp",
+      "from": 160,
+      "to": 539,
+      "type": "backend"
+    },
+    {
+      "participant": "l2",
+      "from": 188,
+      "to": 199,
+      "type": "security"
+    },
+    {
+      "participant": "l3",
+      "from": 216,
+      "to": 227,
+      "type": "database"
+    },
+    {
+      "participant": "l2",
+      "from": 330,
+      "to": 341,
+      "type": "security"
+    },
+    {
+      "participant": "l3",
+      "from": 358,
+      "to": 397,
+      "type": "database"
+    },
+    {
+      "participant": "l4",
+      "from": 414,
+      "to": 425,
+      "type": "messagebus"
+    },
+    {
+      "participant": "l3",
+      "from": 500,
+      "to": 511,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Agent merges",
+      "items": [
+        "The service never merges text",
+        "On a conflict the agent combines the returned value with the new truth"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "No lost update",
+      "items": [
+        "create needs base 0; an existing key returns revision_conflict",
+        "A stale base_revision is refused with the current value"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Provenance",
+      "items": [
+        "Each revision keeps source_url and raw_event_id",
+        "Citing a raw event renews it in L4"
+      ]
+    }
+  ]
+}

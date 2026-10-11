@@ -1,0 +1,200 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Plugin Install and Setup",
+    "output": "docs/diagrams/install.html",
+    "locale": "en",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "user",
+      "label": "User"
+    },
+    {
+      "id": "agent",
+      "label": "Agent: /agentic-memory:setup"
+    },
+    {
+      "id": "local",
+      "label": "Local mode (loopback URL)"
+    }
+  ],
+  "mainPath": [
+    "install",
+    "setup",
+    "script",
+    "stack",
+    "verify",
+    "ready"
+  ],
+  "nodes": [
+    {
+      "id": "install",
+      "lane": "user",
+      "col": 0,
+      "type": "external",
+      "label": "Install plugin",
+      "sublabel": "enter MCP URL + key",
+      "width": 168
+    },
+    {
+      "id": "setup",
+      "lane": "agent",
+      "col": 1,
+      "type": "backend",
+      "label": "Pick mode",
+      "sublabel": "host of mcp_url",
+      "width": 168
+    },
+    {
+      "id": "script",
+      "lane": "local",
+      "col": 2,
+      "type": "cloud",
+      "label": "setup-local.sh",
+      "sublabel": "versioned compose.yml",
+      "width": 168
+    },
+    {
+      "id": "stack",
+      "lane": "local",
+      "col": 3,
+      "type": "database",
+      "label": "Docker stack",
+      "sublabel": "Postgres + image",
+      "tag": "127.0.0.1 only",
+      "width": 168
+    },
+    {
+      "id": "paste",
+      "lane": "user",
+      "col": 3,
+      "type": "frontend",
+      "label": "Paste new key",
+      "sublabel": "/plugin → api_key",
+      "width": 168
+    },
+    {
+      "id": "https",
+      "lane": "agent",
+      "col": 2,
+      "type": "security",
+      "label": "Remote: https only",
+      "sublabel": "GET /health",
+      "tag": "http refused",
+      "width": 168
+    },
+    {
+      "id": "verify",
+      "lane": "agent",
+      "col": 4,
+      "type": "backend",
+      "label": "Probe MCP",
+      "sublabel": "get_project_overview",
+      "width": 168
+    },
+    {
+      "id": "ready",
+      "lane": "user",
+      "col": 5,
+      "type": "external",
+      "label": "Ready",
+      "sublabel": "init or use memory",
+      "width": 168
+    }
+  ],
+  "edges": [
+    {
+      "id": "install-setup",
+      "from": "install",
+      "to": "setup",
+      "label": "run setup",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "setup-script",
+      "from": "setup",
+      "to": "script",
+      "label": "loopback",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "script-stack",
+      "from": "script",
+      "to": "stack",
+      "label": "compose up"
+    },
+    {
+      "id": "stack-paste",
+      "from": "stack",
+      "to": "paste",
+      "label": "first run",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "stack-verify",
+      "from": "stack",
+      "to": "verify",
+      "label": "healthy",
+      "variant": "emphasis"
+    },
+    {
+      "id": "setup-https",
+      "from": "setup",
+      "to": "https",
+      "label": "other host",
+      "variant": "security",
+      "role": "branch",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "https-verify",
+      "from": "https",
+      "to": "verify",
+      "label": "200",
+      "variant": "security"
+    },
+    {
+      "id": "verify-ready",
+      "from": "verify",
+      "to": "ready",
+      "label": "not_found = new project",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Local",
+      "items": [
+        "Downloads compose.yml of the installed plugin version, image pinned by digest",
+        "Creates ~/.agentic-memory/.env with random database passwords and an API key",
+        "After /plugin update, run setup again to update"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Remote",
+      "items": [
+        "The URL must use https",
+        "The API key is required; the service rejects calls without it"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "After setup",
+      "items": [
+        "not_found → the skill runs Init for this project",
+        "Unauthorized → fix api_key in /plugin, then /mcp"
+      ]
+    }
+  ]
+}

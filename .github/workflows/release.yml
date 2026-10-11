@@ -1,0 +1,67 @@
+# Push a tag vX.Y.Z → build and push the image to Docker Hub, then publish a GitHub
+# release with compose.yml pinned to that image by digest. /agentic-memory:setup downloads
+# the compose.yml of the installed plugin version.
+#
+# Repository settings (none of these values live in the repo):
+#   secrets.DOCKERHUB_USERNAME, secrets.DOCKERHUB_TOKEN
+#   vars.DOCKERHUB_IMAGE   e.g. <dockerhub-user>/agentic-memory
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_REPO: ${{ vars.DOCKERHUB_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches plugin version
+        run: |
+          version="v$(jq -r .version .claude-plugin/plugin.json)"
+          test "$version" = "$GITHUB_REF_NAME" || {
+            echo "tag $GITHUB_REF_NAME does not match plugin.json $version"; exit 1; }
+          test -n "$IMAGE_REPO" || { echo "set repository variable DOCKERHUB_IMAGE"; exit 1; }
+
+      - uses: astral-sh/setup-uv@v6
+      - name: Unit tests and privacy check
+        run: |
+          uv sync --frozen
+          uv run pytest -q
+          python3 scripts/privacy_check.py
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ github.ref_name }}
+            ${{ env.IMAGE_REPO }}:latest
+
+      - name: Pin compose.yml to this image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "$DIGEST" || { echo "build produced no digest"; exit 1; }
+          IMAGE="$IMAGE_REPO:$GITHUB_REF_NAME@$DIGEST" envsubst '$IMAGE' < docker/compose.yml > compose.yml
+          grep -qF "image: $IMAGE_REPO:$GITHUB_REF_NAME@$DIGEST" compose.yml
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: compose.yml
+          generate_release_notes: true

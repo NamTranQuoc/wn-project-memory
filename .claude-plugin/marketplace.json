@@ -1,0 +1,13 @@
+{
+  "name": "agentic-memory",
+  "owner": {
+    "name": "agentic-memory maintainers"
+  },
+  "plugins": [
+    {
+      "name": "agentic-memory",
+      "description": "Layered project memory for coding agents over MCP HTTP.",
+      "source": "./"
+    }
+  ]
+}

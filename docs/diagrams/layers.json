@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Memory Layers per Project",
+    "output": "docs/diagrams/layers.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" }
+  },
+  "components": [
+    { "id": "agent", "type": "external", "label": "Agent", "sublabel": "reads top-down", "pos": [40, 200], "size": [130, 64] },
+    { "id": "l1", "type": "frontend", "label": "L1 · Project", "sublabel": "overview · notes · policies", "pos": [280, 200], "size": [170, 64], "tag": "l1_*" },
+    { "id": "sources", "type": "frontend", "label": "L1 · Sources", "sublabel": "chat · Jira · repos · plans", "pos": [280, 380], "size": [170, 64], "tag": "l1_sources" },
+    { "id": "l2", "type": "backend", "label": "L2 · Namespaces", "sublabel": "key template + summary", "pos": [560, 200], "size": [170, 64], "tag": "l2_namespaces" },
+    { "id": "l3", "type": "database", "label": "L3 · Facts", "sublabel": "one current value per key", "pos": [840, 200], "size": [170, 64], "tag": "l3_facts" },
+    { "id": "revisions", "type": "database", "label": "L3 · Revisions", "sublabel": "ordered snapshots + reason", "pos": [840, 380], "size": [170, 64], "tag": "l3_revisions" },
+    { "id": "l4", "type": "messagebus", "label": "L4 · Raw events", "sublabel": "6 months after last touch", "pos": [1120, 380], "size": [170, 64], "tag": "l4_raw_events" },
+    { "id": "ingest", "type": "messagebus", "label": "Ingest ledger", "sublabel": "unit dedup + watermarks", "pos": [560, 380], "size": [170, 64] },
+    { "id": "global", "type": "security", "label": "Global", "sublabel": "people · accounts · teams · notes", "pos": [10, 40], "size": [190, 64], "tag": "g_*" }
+  ],
+  "connections": [
+    { "id": "agent-l1", "from": "agent", "to": "l1", "label": "1 · overview", "variant": "emphasis" },
+    { "id": "l1-l2", "from": "l1", "to": "l2", "label": "2 · pick key", "variant": "emphasis" },
+    { "id": "l2-l3", "from": "l2", "to": "l3", "label": "3 · get_fact", "variant": "emphasis" },
+    { "id": "l3-revisions", "from": "l3", "to": "revisions", "label": "history" },
+    { "id": "revisions-l4", "from": "revisions", "to": "l4", "label": "raw_event_id", "variant": "dashed" },
+    { "id": "l1-sources", "from": "l1", "to": "sources", "label": "owns" },
+    { "id": "sources-ingest", "from": "sources", "to": "ingest", "label": "crawl" },
+    { "id": "agent-global", "from": "agent", "to": "global", "label": "before a DM", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Key rule", "items": ["Every fact key matches one L2 template, e.g. decision.api.{service}.{topic}", "The same parts always build the same key, so reads and writes meet"] },
+    { "dot": "emerald", "title": "History", "items": ["Each write adds a revision: number, time, change type, reason", "Sources keep the real link (source_url) and the raw copy (raw_event_id)"] },
+    { "dot": "amber", "title": "Retention", "items": ["A read or a citation renews a raw event", "When the raw copy is gone, the real link still answers"] }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "agentic-memory",
+  "version": "1.0.0",
+  "description": "Layered project memory for coding agents: project overview (L1), key map (L2), facts with full change history (L3) and raw events (L4), plus a global directory of people and teams. Connects over MCP HTTP to a hosted service or a local Docker stack.",
+  "license": "MIT",
+  "repository": "https://github.com/NamTranQuoc/wn-project-memory",
+  "keywords": ["memory", "mcp", "agent", "knowledge", "project-context"],
+  "userConfig": {
+    "mcp_url": {
+      "type": "string",
+      "title": "MCP URL",
+      "description": "Keep the default to run the service locally with Docker (/agentic-memory:setup starts it). For a hosted service use its https URL ending in /mcp.",
+      "default": "http://127.0.0.1:8765/mcp"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API key",
+      "description": "MEMORY_API_KEY of the service. Local mode: /agentic-memory:setup creates one in ~/.agentic-memory/.env.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "mcpServers": {
+    "agentic-memory": {
+      "type": "http",
+      "url": "${user_config.mcp_url}",
+      "headers": {
+        "X-API-Key": "${user_config.api_key}"
+      }
+    }
+  }
+}

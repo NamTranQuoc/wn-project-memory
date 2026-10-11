@@ -1,0 +1,29 @@
+# Development database only. The app runs on the host with `make run`.
+# On first start, bin/create-db-user.sh creates the database, the app user memory/memory
+# and the SQL reader role, the same way an admin prepares a real database.
+name: agentic-memory-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      APP_DB_NAME: agentic_memory
+      APP_DB_USER: memory
+      APP_DB_PASSWORD: memory
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./bin/create-db-user.sh:/docker-entrypoint-initdb.d/10-create-db-user.sh:ro
+    healthcheck:
+      # TCP only opens once the init scripts are done.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d agentic_memory"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata: {}
