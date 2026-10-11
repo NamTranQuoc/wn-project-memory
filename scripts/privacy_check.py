@@ -3,7 +3,7 @@
 
 Scans files that git would publish and fails on:
   - secret-shaped tokens and private keys,
-  - personal-looking data (real e-mail addresses, Teams/Jira links, home paths),
+  - personal-looking data (real e-mail addresses, Teams/Jira links, home paths, IP addresses),
   - any entry from a local denylist (names, hosts, handles) that is never committed.
 
 Usage:
@@ -48,12 +48,15 @@ PATTERNS: dict[str, re.Pattern[str]] = {
     "teams_link": re.compile(r"teams\.microsoft\.com/l/"),
     "jira_link": re.compile(r"\b[\w\-]+\.atlassian\.net\b"),
     "home_path": re.compile(r"/(?:Users|home)/(?!<)[A-Za-z0-9._\-]+/"),
+    "ip_address": re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])"),
 }
 
 
 # Development defaults and documented placeholders are not credentials.
 _PLACEHOLDER_HOSTS = frozenset({"localhost", "127.0.0.1", "db", "host", "postgres"})
 _PLACEHOLDER_PASSWORDS = frozenset({"password", "memory"})
+# Loopback, the wildcard bind address and the RFC 5737 documentation ranges.
+_PLACEHOLDER_IP = re.compile(r"127\.|0\.0\.0\.0$|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.")
 
 
 def _is_placeholder_url(line: str, match: re.Match[str]) -> bool:
@@ -95,6 +98,8 @@ def scan_text(path: str, text: str, denylist: list[str]) -> list[Finding]:
         for rule, pattern in PATTERNS.items():
             for match in pattern.finditer(line):
                 if rule == "url_credentials" and _is_placeholder_url(line, match):
+                    continue
+                if rule == "ip_address" and _PLACEHOLDER_IP.match(match.group(0)):
                     continue
                 findings.append(Finding(path, number, rule, match.group(0)))
         lowered = line.lower()

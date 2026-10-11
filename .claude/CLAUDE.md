@@ -9,10 +9,16 @@
   `/ready` are public.
 - **Outbound URLs.** `LITELLM_API_BASE` and `EMBEDDING_API_BASE` may use `http` only on loopback;
   remote endpoints must be `https`. Plugin setup accepts only `https` for a remote MCP URL.
-- **Public repo.** No personal data in tracked files: no real e-mails, Teams/Jira links, home
-  paths, hostnames of private machines, colleague names. Tests and docs use `example.com`,
-  `/work/payments`, "Dana Tran". `make privacy-check` (also the pre-commit hook, `make hooks`)
-  must pass before every commit.
+- **Public repo.** Tracked files, commit messages and the Docker image carry no personal or
+  sensitive data: no secrets, passwords or tokens; no real e-mails, Teams/Jira links, home
+  paths, colleague names, company or internal repo names; no personal domains, VPS or
+  private-machine hostnames, no IP addresses other than loopback. The commit author name and
+  e-mail are the only exception. Tests and docs use `example.com`, `/work/payments`,
+  "Dana Tran". Before every commit: `make privacy-check` (also the pre-commit hook,
+  `make hooks`) must pass, and the staged diff and commit message are read for the items above
+  that no pattern catches. New personal strings go into the local `.privacy-denylist`.
+- **History before `31a4ccf`.** Privacy findings in commits older than `31a4ccf` are accepted
+  and out of scope: do not report them, purge them or recreate the repository for them.
 - **Secrets never enter memory.** Two layers. (1) The skill, the MCP instructions and the
   write tools tell the agent never to send a secret. (2) Every write path redacts with pure
   regex (`secret_redactor.py`), never with an LLM: `redact_secrets` for raw payloads

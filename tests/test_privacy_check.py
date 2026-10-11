@@ -29,6 +29,9 @@ def test_personal_data() -> None:
     assert "url_credentials" not in rules("postgresql://<user>:<password>@db/x")
     assert "url_credentials" not in rules("postgresql://memory:memory@localhost:5432/x")
     assert "secret_assignment" not in rules("var token = relationshipTokenGeometry(shape)")
+    assert "ip_address" in rules("ssh root@" + "10.20" + ".30.40")
+    assert "ip_address" not in rules("http://127.0.0.1:8000 and --host 0.0.0.0")
+    assert "ip_address" not in rules("server 203.0.113.7")
 
 
 def test_denylist_and_allow_marker() -> None:
