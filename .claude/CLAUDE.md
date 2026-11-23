@@ -65,7 +65,10 @@
 - **Write limits.** Raw payload ≤ `MAX_RAW_CHARS` (200 000), fact/note content ≤
   `MAX_TEXT_CHARS` (20 000), checked with `check_length`.
 - **Output limits.** Lists and searches default to 5 rows (search hard cap 5, lists pageable).
-- **Truncation.** Text over 1500 chars ends with `... [truncated, use get_raw_context to read full]`.
+- **Truncation.** In lists, search hits, history and write results, text over 1500 chars ends with
+  `... [truncated, use <tool> to read full]`, naming the tool that returns it in full. A read of one
+  item returns its text uncut: `get_fact`, `get_project_note`, `get_global_note` (at most
+  `MAX_TEXT_CHARS`), and the fact inside a `revision_conflict`, which the agent merges into.
   `get_raw_context` returns pages (`RAW_PAGE_CHARS`, at most `MAX_RAW_PAGE_CHARS`).
 - **Few calls.** `get_project_overview` carries policies and namespaces; `write_fact` takes
   `namespace` + `parts` and needs no read before a create; `write_facts` takes up to 10;

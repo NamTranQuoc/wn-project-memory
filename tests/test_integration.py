@@ -170,6 +170,31 @@ async def test_revisions_conflict_and_history(session) -> None:
     assert index["items"][0]["fact_key"] == KEY
 
 
+async def test_one_item_reads_return_the_text_in_full(session) -> None:
+    from src.services import fact_service, global_service, l1_service
+
+    await _project_with_namespace(session)
+    long = ("Rule line. " * 400).strip()
+    ack = await _write(session, "create", 0, long)
+    assert len(ack["content"]) == 1500 and ack["content"].endswith("use get_fact to read full]")
+    assert (await fact_service.get_fact(session, P, KEY))["content"] == long
+
+    with pytest.raises(fact_service.RevisionConflict) as conflict:
+        await _write(session, "merge", 0, "stale write")
+    assert conflict.value.fact["content"] == long  # the agent merges into this text
+    history = await fact_service.get_fact_history(session, P, KEY)
+    assert history["items"][0]["content"].endswith("... [truncated]")
+
+    saved = await l1_service.upsert_note(session, P, note_key="build", title="Build", content=long)
+    assert saved["content"].endswith("use get_project_note to read full]")
+    assert (await l1_service.get_note(session, P, "build"))["content"] == long
+    listed = await l1_service.list_notes(session, P, policy_only=False)
+    assert "content" not in listed["items"][0]
+
+    await global_service.upsert_global_note(session, note_key="style", title="Style", content=long)
+    assert (await global_service.get_global_note(session, "style"))["content"] == long
+
+
 async def test_keyword_search(session) -> None:
     from src.services import search_service
 

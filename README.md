@@ -131,7 +131,8 @@ After turning semantic search on, run `make embed-backfill` once.
 | Global | `find_person`, `list_people`, `upsert_person`, `upsert_identity`, `get_team`, `upsert_team`, `set_team_members`, `upsert_global_note`, `get_global_note`, `list_global_notes` |
 
 REST mirrors them under `/l1`, `/l2`, `/l3`, `/l4` (with `?project_path=`) and `/global`.
-Lists default to 5 rows, long text is cut at 1500 characters, raw payloads come in pages,
+Lists default to 5 rows; long text is cut at 1500 characters in lists, search hits, history and write
+results, while `get_fact`, `get_project_note` and `get_global_note` return it in full; raw payloads come in pages,
 and SQL reads only the caller's own raw events with `LIMIT 10`. `get_project_overview`
 returns the project, its policies and its namespaces in one call; search hits carry a snippet.
 

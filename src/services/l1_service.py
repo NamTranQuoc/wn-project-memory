@@ -202,7 +202,8 @@ def approval_prompt(project_path: str, change: NoteChange) -> str:
     )
 
 
-def _note_to_dict(row: Note, *, full: bool = True) -> dict:
+def _note_to_dict(row: Note, *, full: bool = True, whole: bool = False) -> dict:
+    """`full` includes the content; `whole` returns it uncut, for a read of one note."""
     out = {
         "note_key": row.note_key,
         "title": row.title,
@@ -214,7 +215,10 @@ def _note_to_dict(row: Note, *, full: bool = True) -> dict:
         out["approved_at"] = iso(row.approved_at)
         out["approved_via"] = row.approved_via
     if full:
-        out["content"] = sanitize_and_truncate(row.content)
+        out["content"] = (
+            row.content if whole
+            else sanitize_and_truncate(row.content, read_with="get_project_note")
+        )
     return out
 
 
@@ -302,7 +306,7 @@ async def get_note(session: AsyncSession, project_path: str, note_key: str) -> d
     row = result.scalar_one_or_none()
     if row is None:
         raise NotFoundError("note", note_key=note_key)
-    return _note_to_dict(row)
+    return _note_to_dict(row, whole=True)
 
 
 async def list_notes(

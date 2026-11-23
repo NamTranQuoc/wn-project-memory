@@ -156,7 +156,7 @@ async def upsert_project_note(
 
 @mcp.tool()
 async def get_project_note(project_path: str, note_key: str) -> dict:
-    """Read one project note."""
+    """Read one project note, in full."""
     return await _run(lambda s: l1_service.get_note(s, project_path, note_key))
 
 
@@ -277,7 +277,7 @@ async def list_fact_index(
 
 @mcp.tool()
 async def get_fact(project_path: str, fact_key: str) -> dict:
-    """Current value, last change with its sources, and links."""
+    """Current value in full, last change with its sources, and links."""
     return await _run(lambda s: fact_service.get_fact(s, project_path, fact_key))
 
 
@@ -614,7 +614,7 @@ async def upsert_global_note(note_key: str, title: str, content: str) -> dict:
 
 @mcp.tool()
 async def get_global_note(note_key: str) -> dict:
-    """Read one global note."""
+    """Read one global note, in full."""
     return await _run(lambda s: global_service.get_global_note(s, note_key))
 
 

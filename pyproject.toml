@@ -1,6 +1,6 @@
 [project]
 name = "agentic-memory"
-version = "1.0.0"
+version = "1.0.1"
 description = "Layered project memory for coding agents, served over MCP (HTTP) and REST"
 readme = "README.md"
 requires-python = ">=3.10"

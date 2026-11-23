@@ -1,6 +1,6 @@
 {
   "name": "agentic-memory",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Layered project memory for coding agents: project overview (L1), key map (L2), facts with full change history (L3) and raw events (L4), plus a global directory of people and teams. Connects over MCP HTTP to a hosted service or a local Docker stack.",
   "license": "MIT",
   "repository": "https://github.com/NamTranQuoc/wn-project-memory",

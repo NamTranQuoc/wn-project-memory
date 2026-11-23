@@ -20,7 +20,6 @@ from src.services.common import (
     now_utc,
     require_text,
 )
-from src.services.sanitize import sanitize_and_truncate
 from src.services.secret_redactor import redact_known_secrets, redact_mapping
 
 
@@ -274,8 +273,8 @@ async def get_global_note(session: AsyncSession, note_key: str) -> dict:
     row = await session.get(GlobalNote, _key(note_key, "note_key"))
     if row is None:
         raise NotFoundError("global_note", note_key=note_key)
-    return {"note_key": row.note_key, "title": row.title,
-            "content": sanitize_and_truncate(row.content), "updated_at": iso(row.updated_at)}
+    return {"note_key": row.note_key, "title": row.title, "content": row.content,
+            "updated_at": iso(row.updated_at)}
 
 
 async def list_global_notes(

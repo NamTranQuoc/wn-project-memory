@@ -82,14 +82,16 @@ class SourceRef:
         )
 
 
-def fact_to_dict(fact: Fact, namespace: str | None = None) -> dict:
+def fact_to_dict(fact: Fact, namespace: str | None = None, *, whole: bool = False) -> dict:
+    """`whole` returns the content uncut: a read of one fact, or a fact the agent merges into."""
+    content = fact.content if whole else sanitize_and_truncate(fact.content, read_with="get_fact")
     out = {
         "fact_key": fact.fact_key,
         "kind": fact.kind.value,
         "status": fact.status,
         "title": fact.title,
         "summary": fact.summary,
-        "content": sanitize_and_truncate(fact.content),
+        "content": content,
         "attrs": fact.attrs,
         "revision": fact.revision,
         "updated_at": iso(fact.updated_at),
@@ -176,7 +178,9 @@ async def write_fact(
     fact = await _lock_fact(session, project.id, key)
     current = fact.revision if fact else 0
     if int(base_revision) != current:
-        raise RevisionConflict(current, fact_to_dict(fact, ns.namespace) if fact else None)
+        raise RevisionConflict(
+            current, fact_to_dict(fact, ns.namespace, whole=True) if fact else None
+        )
     if fact is None and change is not ChangeType.create:
         raise ValueError("a new fact needs change_type 'create' and base_revision 0")
     if fact is not None and change is ChangeType.create:
@@ -322,7 +326,7 @@ async def get_fact(session: AsyncSession, project_path: str, fact_key: str) -> d
         .where(FactLink.fact_id == fact.id)
         .limit(list_limit(None))
     )
-    out = fact_to_dict(fact, namespace)
+    out = fact_to_dict(fact, namespace, whole=True)
     if latest is not None:
         sources = await _sources_of(session, [latest.id])
         out["last_change"] = {
@@ -367,7 +371,7 @@ async def get_fact_history(
                 "changed_at": iso(r.changed_at),
                 "title": r.title,
                 "summary": r.summary,
-                "content": sanitize_and_truncate(r.content),
+                "content": sanitize_and_truncate(r.content, read_with=None),
                 "status": r.status,
                 "sources": sources.get(r.id, []),
             }

@@ -20,8 +20,10 @@ project, plus a global directory:
 | L4 | Raw payloads; kept 6 months after the last read or citation | `get_raw_context`, `query_deep_memory_sql` |
 | Global | People (how to address them, accounts), teams, global notes | `find_person`, `get_team`, `get_global_note` |
 
-Results are capped (lists default to 5 rows; page with `offset`). Long text ends with
-`... [truncated …]`; read the full value with `get_raw_context` or `get_fact_history`.
+Results are capped (lists default to 5 rows; page with `offset`). Long text in lists, search hits,
+history and write results ends with `... [truncated, use <tool> to read full]`; `get_fact`,
+`get_project_note` and `get_global_note` return one item's text in full, `get_raw_context` a raw
+payload page by page.
 
 ## Secrets never enter memory
 
